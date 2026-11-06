@@ -1,0 +1,48 @@
+import { assertInvariants, startApi, TestApi } from './harness';
+
+describe('GET /users/:userId/portfolio', () => {
+  let api: TestApi;
+  beforeAll(async () => (api = await startApi()));
+  afterAll(() => api.close());
+
+  it('user 1: golden numbers from the seed (cash 753,000, NEW holds 125,500, total 889,756)', async () => {
+    const res = await api.http().get('/users/1/portfolio').expect(200);
+    expect(res.body).toMatchObject({
+      userId: 1,
+      totalValue: '889756.00',
+      cash: { balance: '753000.00', reserved: '125500.00', available: '627500.00' },
+    });
+    const byTicker = Object.fromEntries(res.body.positions.map((p: any) => [p.ticker, p]));
+    expect(Object.keys(byTicker).sort()).toEqual(['BMA', 'METR', 'PAMP']);
+    expect(byTicker.PAMP).toMatchObject({ quantity: 40, marketValue: '37034.00', totalReturnPct: '-0.45', dailyReturnPct: '0.44' });
+    expect(byTicker.METR).toMatchObject({ quantity: 500, marketValue: '114750.00', totalReturnPct: '-8.20', dailyReturnPct: '-1.08' });
+  });
+
+  it('user 1: the seed oversold BMA (−10); it is shown, valued, and has no total return', async () => {
+    const res = await api.http().get('/users/1/portfolio').expect(200);
+    const bma = res.body.positions.find((p: any) => p.ticker === 'BMA');
+    expect(bma).toMatchObject({ quantity: -10, marketValue: '-15028.00', totalReturnPct: null, dailyReturnPct: '-1.15' });
+  });
+
+  it.each([2, 3, 4])('user %i: no orders → empty portfolio', async (userId) => {
+    const res = await api.http().get(`/users/${userId}/portfolio`).expect(200);
+    expect(res.body).toEqual({
+      userId,
+      totalValue: '0.00',
+      cash: { balance: '0.00', reserved: '0.00', available: '0.00' },
+      positions: [],
+    });
+  });
+
+  it('unknown user → 404 USER_NOT_FOUND as problem+json', async () => {
+    const res = await api.http().get('/users/999/portfolio').expect(404);
+    expect(res.headers['content-type']).toMatch(/application\/problem\+json/);
+    expect(res.body).toMatchObject({ status: 404, code: 'USER_NOT_FOUND' });
+  });
+
+  it.each(['abc', '0', '-1', '1.5', '99999999999'])('userId "%s" → 400', async (id) => {
+    await api.http().get(`/users/${id}/portfolio`).expect(400);
+  });
+
+  afterEach(() => assertInvariants(api.db));
+});

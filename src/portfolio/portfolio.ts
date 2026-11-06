@@ -1,0 +1,45 @@
+import { Controller, Get, Injectable, Param } from '@nestjs/common';
+import Decimal from 'decimal.js';
+import { DataSource } from 'typeorm';
+import { snapshot } from '../db';
+import { cash, filledTrades, latestQuotes } from '../ledger';
+import { IdPipe } from '../id.pipe';
+import { Problem } from '../problem';
+import { foldPositions } from './positions';
+
+@Injectable()
+export class PortfolioService {
+  constructor(private readonly ds: DataSource) {}
+
+  /** Cash and positions come from one snapshot, so an order committing mid-read cannot skew the total. */
+  get(userId: number) {
+    return snapshot(this.ds, async (sql) => {
+      const [user] = await sql('SELECT id FROM users WHERE id = $1', [userId]);
+      if (!user) throw new Problem(404, 'USER_NOT_FOUND');
+      const [money, trades] = await Promise.all([cash(sql, userId), filledTrades(sql, userId)]);
+      const quotes = await latestQuotes(sql, [...new Set(trades.map((t) => t.instrumentId))]);
+      const positions = foldPositions(trades, quotes);
+      const total = positions.reduce((sum, p) => sum.plus(p.marketValue ?? 0), money.balance);
+      return {
+        userId,
+        totalValue: total.toFixed(2),
+        cash: {
+          balance: money.balance.toFixed(2),
+          reserved: money.reserved.toFixed(2),
+          available: money.available.toFixed(2),
+        },
+        positions,
+      };
+    });
+  }
+}
+
+@Controller('users/:userId/portfolio')
+export class PortfolioController {
+  constructor(private readonly portfolio: PortfolioService) {}
+
+  @Get()
+  get(@Param('userId', IdPipe) userId: number) {
+    return this.portfolio.get(userId);
+  }
+}
