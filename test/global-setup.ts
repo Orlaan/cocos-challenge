@@ -19,9 +19,10 @@ export default async function globalSetup() {
   process.env.TEST_PG_ADMIN_URL = container.getConnectionUri();
 
   const seed = readFileSync('db/database.sql', 'utf8');
+  const additions = readFileSync('db/local-additions.sql', 'utf8');
   const admin = new Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
-  for (const [name, sql] of [['provided', seed], ['local', seed]]) {
+  for (const [name, sql] of [['provided', seed], ['local', seed + additions]]) {
     await admin.query(`CREATE DATABASE ${name}`);
     const db = new Client({ connectionString: container.getConnectionUri().replace(/\/[^/]+$/, `/${name}`) });
     await db.connect();

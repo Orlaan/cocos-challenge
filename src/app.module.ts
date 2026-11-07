@@ -3,6 +3,8 @@ import { APP_FILTER, APP_PIPE } from '@nestjs/core';
 import { DataSource } from 'typeorm';
 import { createDataSource } from './db';
 import { InstrumentsController, InstrumentsService } from './instruments/instruments';
+import { Idempotency } from './orders/idempotency';
+import { OrdersController, OrdersService } from './orders/orders';
 import { PortfolioController, PortfolioService } from './portfolio/portfolio';
 import { Problem, ProblemFilter } from './problem';
 
@@ -17,7 +19,7 @@ const validation = new ValidationPipe({
 });
 
 @Module({
-  controllers: [PortfolioController, InstrumentsController],
+  controllers: [PortfolioController, InstrumentsController, OrdersController],
   providers: [
     { provide: DATABASE_URL, useFactory: () => process.env.DATABASE_URL },
     { provide: DataSource, inject: [DATABASE_URL], useFactory: (url: string) => createDataSource(url) },
@@ -25,6 +27,8 @@ const validation = new ValidationPipe({
     { provide: APP_FILTER, useClass: ProblemFilter },
     PortfolioService,
     InstrumentsService,
+    OrdersService,
+    Idempotency,
   ],
 })
 export class AppModule implements OnApplicationShutdown {
