@@ -13,7 +13,9 @@ export class Problem extends Error {
   }
 }
 
-const LOCK_NOT_AVAILABLE = '55P03'; // Postgres SQLSTATE raised by lock_timeout
+// Overload, not a bug: the client should retry. 55P03 = lock_timeout, 57014 = statement_timeout.
+const BUSY_SQLSTATES = ['55P03', '57014'];
+const POOL_TIMEOUT = /timeout exceeded when trying to connect/;
 
 /** Renders every error as RFC 9457 problem details. */
 @Catch()
@@ -34,11 +36,16 @@ export class ProblemFilter implements ExceptionFilter {
     if (error instanceof Problem) return error;
     if (error instanceof HttpException) {
       const status = error.getStatus();
-      return new Problem(status, status === 404 ? 'NOT_FOUND' : 'VALIDATION_ERROR', error.message);
+      const code = status === 400 ? 'VALIDATION_ERROR' : status === 404 ? 'NOT_FOUND' : `HTTP_${status}`;
+      return new Problem(status, code, error.message);
     }
-    if ((error as { code?: string })?.code === LOCK_NOT_AVAILABLE) {
-      return new Problem(503, 'BUSY', 'Another order for this user is in progress. Retry.');
+    const { code, message } = (error ?? {}) as { code?: string; message?: string };
+    if (BUSY_SQLSTATES.includes(code ?? '') || POOL_TIMEOUT.test(message ?? '')) {
+      this.log.warn(JSON.stringify({ event: 'busy', cause: code ?? 'pool' }));
+      return new Problem(503, 'BUSY', 'The service is busy. Retry.');
     }
+    // Anything else, a dropped connection included, is a 500: the outcome may be unknown
+    // (a connection lost at COMMIT), so only a retry with the same Idempotency-Key is safe.
     this.log.error(error);
     return new Problem(500, 'INTERNAL_ERROR');
   }

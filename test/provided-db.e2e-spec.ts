@@ -28,12 +28,29 @@ describe('running on the provided database (original schema, SSL)', () => {
     expect(rows[0].t).toBeNull();
   });
 
-  it('places orders; an Idempotency-Key header is ignored instead of failing', async () => {
+  it('places orders', async () => {
+    const res = await api.http().post('/users/1/orders').send({ instrumentId: 34, side: 'BUY', type: 'MARKET', size: 1 });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('FILLED');
+  });
+
+  it('an Idempotency-Key it cannot honour → 501, nothing saved (never a silent duplicate)', async () => {
     const before = await orderCount(api.db);
     const body = { instrumentId: 34, side: 'BUY', type: 'MARKET', size: 1 };
-    await api.http().post('/users/1/orders').set('Idempotency-Key', 'k').send(body).expect(201);
-    await api.http().post('/users/1/orders').set('Idempotency-Key', 'k').send(body).expect(201);
-    expect(await orderCount(api.db)).toBe(before + 2);
+    const res = await api.http().post('/users/1/orders').set('Idempotency-Key', 'k').send(body).expect(501);
+    expect(res.body.code).toBe('IDEMPOTENCY_UNAVAILABLE');
+    expect(await orderCount(api.db)).toBe(before);
+  });
+
+  it('creating the table later enables the key without a restart', async () => {
+    await api.db.query(`CREATE TABLE idempotency_keys (userid INT NOT NULL, key VARCHAR(255) NOT NULL,
+      request_hash TEXT NOT NULL, response JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (userid, key))`);
+    const body = { instrumentId: 34, side: 'BUY', type: 'MARKET', size: 1 };
+    const first = await api.http().post('/users/1/orders').set('Idempotency-Key', 'later').send(body).expect(201);
+    const again = await api.http().post('/users/1/orders').set('Idempotency-Key', 'later').send(body).expect(201);
+    expect(again.body.id).toBe(first.body.id);
+    await api.db.query('DROP TABLE idempotency_keys');
   });
 
   it('the test harness refuses any non-local database', () => {

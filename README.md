@@ -30,12 +30,12 @@ npm ci
 DATABASE_URL='postgres://usuario:clave@host/base?sslmode=require' npm run start:dev
 ```
 
-La app no crea ni migra nada en esa base. Sin la tabla local de idempotencia, ignora el header `Idempotency-Key` y lo avisa en el log.
+La app no crea ni migra nada en esa base. Sin la tabla de idempotencia (`db/local-additions.sql`), una request con `Idempotency-Key` recibe 501 en lugar de un reintento inseguro; quien opere la base puede crearla con `psql "$DATABASE_URL" -f db/local-additions.sql`, sin reiniciar la API.
 
 ## Verificar
 
 ```bash
-npm run verify   # typecheck + unit + e2e (Postgres real vía Testcontainers) + chequeos de diseño
+npm run verify   # typecheck + unit + e2e (Postgres real vía Testcontainers)
 ```
 
 Necesita Docker y Node 22.13+. Los e2e levantan un Postgres con SSL, clonan una base nueva por archivo de test y se niegan a correr contra un host que no sea local. CI corre lo mismo (`.github/workflows/ci.yml`).
@@ -44,12 +44,12 @@ Necesita Docker y Node 22.13+. Los e2e levantan un Postgres con SSL, clonan una 
 
 | Método y ruta | Qué hace |
 |---|---|
-| `GET /users/:userId/portfolio` | Valor total, cash (saldo, reservado, disponible) y posiciones con cantidad, valor, rendimiento total y diario |
+| `GET /users/:userId/portfolio` | Valor total, cash (saldo, reservado, disponible) y posiciones con cantidad (total, reservada, disponible), valor, rendimiento total y diario |
 | `GET /instruments?q=gal` | Busca parcial por ticker o nombre; ticker exacto primero; ARS no aparece |
 | `POST /users/:userId/orders` | Envía una orden. Header opcional `Idempotency-Key` |
 | `POST /users/:userId/orders/:orderId/cancel` | Cancela una orden NEW |
 
-Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En lugar de `size` se puede mandar `amount` (ARS): la API compra la mayor cantidad de acciones enteras que alcanza. `LIMIT` necesita `price`; `MARKET` toma el último `close`.
+Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En lugar de `size` se puede mandar `amount` (ARS): la API compra la mayor cantidad de acciones enteras que alcanza. `LIMIT` necesita `price`; `MARKET` toma el último `close`. El dinero viaja como string decimal, igual que en las respuestas: `"price": "900.00"`, `"amount": "10000"`.
 
 ## Qué responde cada caso
 
@@ -62,9 +62,18 @@ Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En
 | Usuario, instrumento u orden inexistente (u orden de otro usuario) | 404 | no |
 | Cancelar una orden que no está NEW | 409 | no |
 | Misma `Idempotency-Key` con otro body | 422 | no |
-| Otra orden del mismo usuario retiene el lock más de 3 s | 503 + `Retry-After` | no |
+| `Idempotency-Key` en una base sin la tabla de idempotencia | 501 | no |
+| Lock ocupado más de 3 s, sentencia de más de 5 s o pool sin conexiones | 503 + `Retry-After` | no |
+| Error inesperado (base caída, bug) | 500 | desconocido: reintentar sólo con la misma `Idempotency-Key` |
 
 Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable.
+
+## Revisar en 15 minutos
+
+1. `src/orders/orders.ts` `place()`: lock → leer → decidir → insertar, en una transacción.
+2. `src/db.ts`: el lock por usuario y los límites de tiempo de toda transacción.
+3. `src/orders/decide.ts` y `src/portfolio/positions.ts`: las reglas de negocio, puras, con tests unitarios.
+4. `test/concurrency.e2e-spec.ts`: la carrera, probada; `test/harness.ts` `assertInvariants` corre después de cada test.
 
 ## Cómo está hecho
 
@@ -72,6 +81,7 @@ Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable.
 src/
   db.ts            transacción + lock por usuario (SET LOCAL lock_timeout, SELECT … FOR UPDATE)
   ledger.ts        cash, reservas y acciones derivadas de la tabla orders
+  limits.ts        límites que impone el esquema (INT, NUMERIC(10,2))
   orders/          decide.ts: la decisión de negocio, pura · orders.ts: lock → leer → decidir → insertar
   portfolio/       positions.ts: costo promedio ponderado, puro · portfolio.ts: endpoint
   instruments/     búsqueda
@@ -93,7 +103,3 @@ db/                database.sql (sin cambios) · local-additions.sql · optional
 4. Market data: cache con límite de antigüedad; los saldos nunca se cachean.
 5. Mercado real: outbox + consumidores idempotentes para enviar órdenes y recibir ejecuciones.
 6. Muchos usuarios: shard por usuario; el lock por usuario ya encaja.
-
-## Supuestos
-
-Ver [DECISIONS.md](DECISIONS.md): rendimiento por costo promedio ponderado, reservas de órdenes NEW, BMA −10 y PGR/IRCP sin precio. Varios coinciden con respuestas de Cocos a otros candidatos; no son reglas oficiales.

@@ -10,21 +10,27 @@ GET {{api}}/instruments?q=gal
 ### MARKET BUY 10 GGAL → 201 FILLED at the latest close
 POST {{api}}/users/1/orders
 Content-Type: application/json
-Idempotency-Key: demo-1
 
 { "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }
+
+### With an Idempotency-Key: send it twice → one order; the second answer has Idempotent-Replayed: true
+POST {{api}}/users/1/orders
+Content-Type: application/json
+Idempotency-Key: demo-1
+
+{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 1 }
 
 ### MARKET BUY for 10000 ARS → the most whole shares it covers
 POST {{api}}/users/1/orders
 Content-Type: application/json
 
-{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "amount": 10000 }
+{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "amount": "10000" }
 
 ### LIMIT SELL 10 PAMP at 1000 → 201 NEW (holds 10 shares)
 POST {{api}}/users/1/orders
 Content-Type: application/json
 
-{ "instrumentId": 47, "side": "SELL", "type": "LIMIT", "size": 10, "price": 1000 }
+{ "instrumentId": 47, "side": "SELL", "type": "LIMIT", "size": 10, "price": "1000.00" }
 
 ### BUY more than available → 201 REJECTED INSUFFICIENT_FUNDS
 POST {{api}}/users/1/orders

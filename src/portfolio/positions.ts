@@ -6,6 +6,8 @@ export interface Position {
   ticker: string;
   name: string;
   quantity: number;
+  reservedQuantity: number; // held by NEW SELL orders
+  availableQuantity: number; // what the user can still sell
   marketValue: string | null;
   totalReturnPct: string | null;
   dailyReturnPct: string | null;
@@ -23,7 +25,7 @@ interface Holding {
  * When a position is flat or negative (seed BMA is −10), the next BUY restarts the cost basis.
  * Pure: no I/O, so the money math is unit-tested on its own.
  */
-export function foldPositions(trades: Trade[], quotes: Map<number, Quote>): Position[] {
+export function foldPositions(trades: Trade[], quotes: Map<number, Quote>, held = new Map<number, number>()): Position[] {
   const holdings = new Map<number, Holding>();
   for (const t of trades) {
     const h = holdings.get(t.instrumentId) ?? { trade: t, quantity: 0, cost: new Decimal(0) };
@@ -38,10 +40,12 @@ export function foldPositions(trades: Trade[], quotes: Map<number, Quote>): Posi
     }
     holdings.set(t.instrumentId, h);
   }
-  return [...holdings.values()].filter((h) => h.quantity !== 0).map((h) => value(h, quotes.get(h.trade.instrumentId)));
+  return [...holdings.values()]
+    .filter((h) => h.quantity !== 0)
+    .map((h) => value(h, quotes.get(h.trade.instrumentId), held.get(h.trade.instrumentId) ?? 0));
 }
 
-function value({ trade, quantity, cost }: Holding, quote?: Quote): Position {
+function value({ trade, quantity, cost }: Holding, quote: Quote | undefined, reserved: number): Position {
   const close = quote && new Decimal(quote.close);
   const marketValue = close?.times(quantity);
   const totalReturn = marketValue && quantity > 0 && cost.gt(0) ? marketValue.div(cost).minus(1) : undefined;
@@ -53,6 +57,8 @@ function value({ trade, quantity, cost }: Holding, quote?: Quote): Position {
     ticker: trade.ticker,
     name: trade.name,
     quantity,
+    reservedQuantity: reserved,
+    availableQuantity: quantity - reserved,
     marketValue: marketValue?.toFixed(2) ?? null,
     totalReturnPct: pct(totalReturn),
     dailyReturnPct: pct(dailyReturn),

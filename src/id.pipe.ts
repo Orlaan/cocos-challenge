@@ -1,7 +1,6 @@
 import { Injectable, PipeTransform } from '@nestjs/common';
+import { INT_MAX } from './limits';
 import { Problem } from './problem';
-
-export const INT_MAX = 2_147_483_647; // Postgres INT, the type of every id and of orders.size
 
 /** Path ids must be positive integers that fit a Postgres INT; anything else is a 400, not a 500. */
 @Injectable()

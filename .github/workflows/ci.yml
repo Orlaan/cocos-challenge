@@ -8,4 +8,4 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - run: npm run verify # unit + e2e (Testcontainers uses the runner's Docker) + design checks
+      - run: npm run verify # typecheck + unit + e2e (Testcontainers uses the runner's Docker)

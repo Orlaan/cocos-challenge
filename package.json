@@ -12,7 +12,7 @@
     "start:dev": "tsc -p tsconfig.build.json && node dist/main.js",
     "test": "jest --selectProjects unit",
     "test:e2e": "jest --selectProjects e2e --runInBand",
-    "verify": "node scripts/verify.mjs"
+    "verify": "tsc --noEmit -p tsconfig.json && npm test && npm run test:e2e"
   },
   "dependencies": {
     "@nestjs/common": "11.2.8",

@@ -38,6 +38,18 @@ export async function availableShares(sql: Sql, userId: number, instrumentId: nu
   return row.shares;
 }
 
+/** Shares held by NEW SELL orders, per instrument. */
+export async function heldShares(sql: Sql, userId: number): Promise<Map<number, number>> {
+  const rows = await sql<{ instrumentId: number; shares: number }>(
+    `SELECT instrumentid AS "instrumentId", SUM(size)::int AS shares
+     FROM orders
+     WHERE userid = $1 AND status = 'NEW' AND side = 'SELL'
+     GROUP BY instrumentid`,
+    [userId],
+  );
+  return new Map(rows.map((r) => [r.instrumentId, r.shares]));
+}
+
 export interface Trade {
   instrumentId: number;
   ticker: string;
@@ -63,13 +75,19 @@ export interface Quote {
   previousClose: string | null;
 }
 
-/** Latest close per instrument. Instruments with no market data are missing from the map. */
+/**
+ * The latest close per instrument. An instrument with no market data, or whose latest close is not positive,
+ * is missing from the map: it has no usable price (never an older one).
+ */
 export async function latestQuotes(sql: Sql, instrumentIds: number[]): Promise<Map<number, Quote>> {
   const rows = await sql<Quote & { instrumentId: number }>(
-    `SELECT DISTINCT ON (instrumentid) instrumentid AS "instrumentId", close, previousclose AS "previousClose"
-     FROM marketdata
-     WHERE instrumentid = ANY($1) AND close IS NOT NULL
-     ORDER BY instrumentid, date DESC, id DESC`,
+    `SELECT * FROM (
+       SELECT DISTINCT ON (instrumentid) instrumentid AS "instrumentId", close, previousclose AS "previousClose"
+       FROM marketdata
+       WHERE instrumentid = ANY($1)
+       ORDER BY instrumentid, date DESC, id DESC
+     ) latest
+     WHERE close > 0`,
     [instrumentIds],
   );
   return new Map(rows.map((r) => [r.instrumentId, r]));

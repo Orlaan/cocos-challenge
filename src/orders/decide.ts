@@ -1,5 +1,5 @@
 import Decimal from 'decimal.js';
-import { INT_MAX } from '../id.pipe';
+import { INT_MAX } from '../limits';
 import type { PlaceOrder } from './order.dto';
 
 export type Status = 'FILLED' | 'NEW' | 'REJECTED';
@@ -18,6 +18,8 @@ export function shapeError(o: PlaceOrder): string | null {
   if ((o.size === undefined) === (o.amount === undefined)) return 'Send exactly one of size or amount';
   if (o.type === 'LIMIT' && o.price === undefined) return 'LIMIT orders need a price';
   if (o.type === 'MARKET' && o.price !== undefined) return 'MARKET orders take the market price; do not send price';
+  if (o.price !== undefined && new Decimal(o.price).isZero()) return 'price must be greater than 0';
+  if (o.amount !== undefined && new Decimal(o.amount).isZero()) return 'amount must be greater than 0';
   return null;
 }
 

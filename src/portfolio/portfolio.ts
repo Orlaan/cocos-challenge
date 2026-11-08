@@ -2,7 +2,7 @@ import { Controller, Get, Injectable, Param } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { DataSource } from 'typeorm';
 import { snapshot } from '../db';
-import { cash, filledTrades, latestQuotes } from '../ledger';
+import { cash, filledTrades, heldShares, latestQuotes } from '../ledger';
 import { IdPipe } from '../id.pipe';
 import { Problem } from '../problem';
 import { foldPositions } from './positions';
@@ -16,9 +16,10 @@ export class PortfolioService {
     return snapshot(this.ds, async (sql) => {
       const [user] = await sql('SELECT id FROM users WHERE id = $1', [userId]);
       if (!user) throw new Problem(404, 'USER_NOT_FOUND');
-      const [money, trades] = await Promise.all([cash(sql, userId), filledTrades(sql, userId)]);
+      const money = await cash(sql, userId);
+      const trades = await filledTrades(sql, userId);
       const quotes = await latestQuotes(sql, [...new Set(trades.map((t) => t.instrumentId))]);
-      const positions = foldPositions(trades, quotes);
+      const positions = foldPositions(trades, quotes, await heldShares(sql, userId));
       const total = positions.reduce((sum, p) => sum.plus(p.marketValue ?? 0), money.balance);
       return {
         userId,
