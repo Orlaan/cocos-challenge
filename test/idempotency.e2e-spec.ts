@@ -1,4 +1,4 @@
-import { assertInvariants, orderCount, startApi, TestApi } from './harness';
+import { holdUserRow, orderCount, startApi, TestApi, waitForLockWaiters } from './harness';
 
 const GGAL = 34;
 const YPFD = 50;
@@ -7,10 +7,7 @@ const order = { instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 };
 describe('Idempotency-Key on POST /users/:userId/orders', () => {
   let api: TestApi;
   beforeEach(async () => (api = await startApi('local')));
-  afterEach(async () => {
-    await assertInvariants(api.db);
-    await api.close();
-  });
+  afterEach(() => api.close()); // close() also checks the invariants
 
   const send = (body: object, key?: string, userId = 1) => {
     const req = api.http().post(`/users/${userId}/orders`);
@@ -20,7 +17,12 @@ describe('Idempotency-Key on POST /users/:userId/orders', () => {
 
   it('5 parallel retries with one key → one order; the others replay the same response', async () => {
     const before = await orderCount(api.db);
-    const results = await Promise.all(Array.from({ length: 5 }, () => send(order, 'retry-1')));
+    const holder = await holdUserRow(api.url);
+    const pending = Promise.all(Array.from({ length: 5 }, () => send(order, 'retry-1')));
+    await waitForLockWaiters(api.db, 5); // all 5 retries are in flight at once
+    await holder.query('COMMIT');
+    await holder.end();
+    const results = await pending;
     expect(await orderCount(api.db)).toBe(before + 1);
     expect(new Set(results.map((r) => r.body.id)).size).toBe(1);
     expect(results.every((r) => r.status === 201)).toBe(true);
@@ -48,6 +50,19 @@ describe('Idempotency-Key on POST /users/:userId/orders', () => {
     const res = await send({ ...order, size: 2 }, 'k').expect(422);
     expect(res.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
     expect(await orderCount(api.db)).toBe(before);
+  });
+
+  it('a retry gets its first answer even if the instrument changed since', async () => {
+    const first = await send(order, 'k-changed').expect(201);
+    await api.db.query(`UPDATE instruments SET type = 'MONEDA' WHERE id = $1`, [GGAL]); // now untradable
+    const again = await send(order, 'k-changed').expect(201);
+    expect(again.body).toEqual(first.body);
+  });
+
+  it('a reused key with an unknown instrument → 422, not 404', async () => {
+    await send(order, 'k-unknown').expect(201);
+    const res = await send({ ...order, instrumentId: 999999 }, 'k-unknown').expect(422);
+    expect(res.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
   });
 
   it('keys are per user: the same key for another user is a new request', async () => {

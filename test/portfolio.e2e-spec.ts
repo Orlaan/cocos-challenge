@@ -46,6 +46,23 @@ describe('GET /users/:userId/portfolio', () => {
     await other.close();
   });
 
+  it('a quote with no date never replaces the latest dated quote', async () => {
+    const other = await startApi();
+    await other.db.query(`INSERT INTO marketdata (instrumentid, date, close, previousclose) VALUES (47, NULL, 1, 1)`); // 47 = PAMP
+    const res = await other.http().get('/users/1/portfolio').expect(200);
+    expect(res.body.positions.find((p: any) => p.ticker === 'PAMP').marketValue).toBe('37034.00'); // 40 × 925.85
+    await other.close();
+  });
+
+  it('a latest close of 0 is no price: the position is unpriced, not worth 0', async () => {
+    const other = await startApi();
+    await other.db.query(`INSERT INTO marketdata (instrumentid, date, close, previousclose) VALUES (54, '2099-01-01', 0, 0)`); // 54 = METR
+    const res = await other.http().get('/users/1/portfolio').expect(200);
+    expect(res.body.positions.find((p: any) => p.ticker === 'METR').marketValue).toBeNull();
+    expect(res.body.unpricedInstrumentIds).toEqual([54]);
+    await other.close();
+  });
+
   it('unknown user → 404 USER_NOT_FOUND as problem+json', async () => {
     const res = await api.http().get('/users/999/portfolio').expect(404);
     expect(res.headers['content-type']).toMatch(/application\/problem\+json/);

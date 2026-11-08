@@ -18,6 +18,17 @@ describe('POST /users/:userId/orders/:orderId/cancel', () => {
     expect(portfolio.body.cash).toMatchObject({ reserved: '90000.00', available: '663000.00' });
   });
 
+  it('cancelling a NEW SELL frees its shares: all of them can be sold again', async () => {
+    const PAMP = 47; // user 1 holds 40
+    const sell = await api.http().post('/users/1/orders').send({ instrumentId: PAMP, side: 'SELL', type: 'LIMIT', size: 40, price: '2000.00' });
+    expect(sell.body.status).toBe('NEW');
+    await cancel(sell.body.id).expect(200);
+    const pamp = (await api.http().get('/users/1/portfolio')).body.positions.find((p: any) => p.ticker === 'PAMP');
+    expect(pamp).toMatchObject({ quantity: 40, reservedQuantity: 0, availableQuantity: 40 });
+    const market = await api.http().post('/users/1/orders').send({ instrumentId: PAMP, side: 'SELL', type: 'MARKET', size: 40 });
+    expect(market.body.status).toBe('FILLED');
+  });
+
   it('cancelling twice → 409 the second time', async () => {
     await cancel(5).expect(200);
     const res = await cancel(5).expect(409);

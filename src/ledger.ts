@@ -85,7 +85,7 @@ export async function latestQuotes(sql: Sql, instrumentIds: number[]): Promise<M
        SELECT DISTINCT ON (instrumentid) instrumentid AS "instrumentId", close, previousclose AS "previousClose"
        FROM marketdata
        WHERE instrumentid = ANY($1)
-       ORDER BY instrumentid, date DESC, id DESC
+       ORDER BY instrumentid, date DESC NULLS LAST, id DESC
      ) latest
      WHERE close > 0`,
     [instrumentIds],

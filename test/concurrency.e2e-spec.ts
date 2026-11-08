@@ -1,30 +1,19 @@
 import { Client } from 'pg';
-import { assertInvariants, startApi, TestApi, waitForLockWaiters } from './harness';
+import { holdUserRow, startApi, TestApi, waitForLockWaiters } from './harness';
 
 const GGAL = 34; // close 885.80
 const METR = 54; // user 1 holds 500
 const buy150k = { instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '150000' }; // 169 shares = 149,700.20
 
-/** Takes user 1's row lock from outside the API, so requests sent meanwhile all queue on it at once. */
-async function holdUserRow(url: string): Promise<Client> {
-  const holder = new Client({ connectionString: url.split('?')[0] });
-  await holder.connect();
-  await holder.query('BEGIN');
-  await holder.query('SELECT id FROM users WHERE id = 1 FOR UPDATE');
-  return holder;
-}
-
 describe('concurrent orders for one user', () => {
   let api: TestApi;
   beforeEach(async () => (api = await startApi()));
-  afterEach(async () => {
-    await assertInvariants(api.db);
-    await api.close();
-  });
+  afterEach(() => api.close()); // close() also checks the invariants
 
   const send = (body: object) => api.http().post('/users/1/orders').send(body);
 
   // To see the race fail: delete `FOR UPDATE` in src/db.ts and run `npx jest test/concurrency`: 5 FILLED.
+  // (The 5 still queue, on the INSERT's foreign-key check, but only after each has read the same available.)
   it('5 parallel BUYs with cash for 4 → exactly 4 FILLED, 1 REJECTED, available never below 0', async () => {
     const holder = await holdUserRow(api.url);
     const pending = Promise.all(Array.from({ length: 5 }, () => send(buy150k)));
@@ -72,15 +61,33 @@ describe('concurrent orders for one user', () => {
     });
 
     it('an order waits for the lock, then completes', async () => {
-      let done = false;
-      const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 }).then((r) => ((done = true), r));
-      await new Promise((r) => setTimeout(r, 1000));
-      expect(done).toBe(false); // blocked on SELECT … FOR UPDATE
+      const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 }).then((r) => r); // then() sends it
+      await waitForLockWaiters(api.db, 1); // blocked on SELECT … FOR UPDATE
 
       await holder.query('COMMIT');
       const res = await pending;
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('FILLED');
+    });
+
+    it('a MARKET order that waited fills at the close published while it waited', async () => {
+      const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 }).then((r) => r);
+      await waitForLockWaiters(api.db, 1);
+      await api.db.query(`INSERT INTO marketdata (instrumentid, date, close, previousclose) VALUES ($1, '2099-01-01', 900, 885.80)`, [GGAL]);
+      await holder.query('COMMIT');
+      expect((await pending).body).toMatchObject({ status: 'FILLED', price: '900.00' });
+    });
+
+    it('an order that waited is timed when it executed, after the wait; waiting orders keep lock order', async () => {
+      const one = { instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 };
+      const pending = Promise.all([send(one), send(one), send(one)]);
+      await waitForLockWaiters(api.db, 3);
+      const [{ released }] = (await holder.query(`SELECT clock_timestamp() AT TIME ZONE 'UTC' AS released`)).rows;
+      await holder.query('COMMIT');
+      const ids = (await pending).map((r) => r.body.id);
+      const { rows } = await api.db.query('SELECT id, datetime FROM orders WHERE id = ANY($1) ORDER BY datetime', [ids]);
+      expect(rows.map((r) => r.id)).toEqual([...ids].sort((a, b) => a - b));
+      for (const r of rows) expect(r.datetime.getTime()).toBeGreaterThan(released.getTime());
     });
 
     it('after 3 s of waiting → 503 BUSY with Retry-After, nothing saved', async () => {

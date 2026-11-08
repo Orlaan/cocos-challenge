@@ -83,7 +83,14 @@ describe('POST /users/:userId/orders', () => {
 
     it('MARKET on an instrument with no market data → NO_MARKET_PRICE', async () => {
       const res = await send({ instrumentId: PGR, side: 'BUY', type: 'MARKET', size: 1 }).expect(201);
-      expect(res.body).toMatchObject({ status: 'REJECTED', reason: 'NO_MARKET_PRICE', price: null });
+      expect(res.body).toMatchObject({ status: 'REJECTED', reason: 'NO_MARKET_PRICE', size: 1, price: null });
+    });
+
+    it('MARKET by amount with no market data → 400: no size can be computed, so it is not an order', async () => {
+      const before = await orderCount(api.db);
+      const res = await send({ instrumentId: PGR, side: 'BUY', type: 'MARKET', amount: '1000' }).expect(400);
+      expect(res.body.code).toBe('AMOUNT_NEEDS_A_PRICE');
+      expect(await orderCount(api.db)).toBe(before);
     });
   });
 
@@ -105,6 +112,23 @@ describe('POST /users/:userId/orders', () => {
       const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'LIMIT', size: 1, price: '800.00' }).expect(201);
       await api.http().post(`/users/1/orders/${res.body.id}/cancel`).expect(200);
       expect(await events(res.body.id)).toEqual([{ status: 'NEW', reason: null }, { status: 'CANCELLED', reason: null }]);
+    });
+
+    it('any status orders.status accepts can be recorded (up to 20 characters)', async () => {
+      await api.db.query(`UPDATE orders SET status = 'PARTIALLY_FILLED' WHERE id = 1`);
+      expect((await events(1)).at(-1)).toEqual({ status: 'PARTIALLY_FILLED', reason: null });
+      await api.db.query(`UPDATE orders SET status = 'FILLED' WHERE id = 1`);
+    });
+
+    it('a saved order cannot be edited, only its status changes', async () => {
+      const error = await api.db.query(`UPDATE orders SET price = price + 1 WHERE id = 1`).catch((e) => e);
+      expect(error.message).toMatch(/only status can change/);
+    });
+
+    it('an UPDATE that leaves the status as it was adds no event', async () => {
+      const before = await events(1);
+      await api.db.query(`UPDATE orders SET status = status WHERE id = 1`);
+      expect(await events(1)).toEqual(before);
     });
   });
 

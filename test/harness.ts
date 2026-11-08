@@ -53,6 +53,7 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
     ds: app.get(DataSource),
     url,
     close: async () => {
+      await assertInvariants(db);
       await db.end();
       await app.close();
     },
@@ -61,6 +62,15 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
 
 export async function orderCount(db: Client): Promise<number> {
   return (await db.query('SELECT count(*)::int AS n FROM orders')).rows[0].n;
+}
+
+/** Takes user 1's row lock from outside the API, so requests sent meanwhile all queue on it at once. */
+export async function holdUserRow(url: string): Promise<Client> {
+  const holder = new Client({ connectionString: url.split('?')[0] });
+  await holder.connect();
+  await holder.query('BEGIN');
+  await holder.query('SELECT id FROM users WHERE id = 1 FOR UPDATE');
+  return holder;
 }
 
 /** Waits until `n` connections to this test database are blocked on a lock. */

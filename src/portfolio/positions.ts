@@ -14,7 +14,9 @@ export interface Position {
 }
 
 interface Holding {
-  trade: Trade;
+  instrumentId: number;
+  ticker: string;
+  name: string;
   quantity: number;
   cost: Decimal; // cost basis of the shares still held (weighted average cost)
 }
@@ -28,7 +30,8 @@ interface Holding {
 export function foldPositions(trades: Trade[], quotes: Map<number, Quote>, held = new Map<number, number>()): Position[] {
   const holdings = new Map<number, Holding>();
   for (const t of trades) {
-    const h = holdings.get(t.instrumentId) ?? { trade: t, quantity: 0, cost: new Decimal(0) };
+    const { instrumentId, ticker, name } = t;
+    const h = holdings.get(instrumentId) ?? { instrumentId, ticker, name, quantity: 0, cost: new Decimal(0) };
     if (t.side === 'BUY') {
       if (h.quantity > 0) {
         h.cost = h.cost.plus(new Decimal(t.price).times(t.size)); // re-average
@@ -43,14 +46,14 @@ export function foldPositions(trades: Trade[], quotes: Map<number, Quote>, held 
       h.cost = left > 0 ? h.cost.times(left).div(h.quantity) : new Decimal(0);
       h.quantity = left;
     }
-    holdings.set(t.instrumentId, h);
+    holdings.set(instrumentId, h);
   }
   return [...holdings.values()]
     .filter((h) => h.quantity !== 0)
-    .map((h) => value(h, quotes.get(h.trade.instrumentId), held.get(h.trade.instrumentId) ?? 0));
+    .map((h) => value(h, quotes.get(h.instrumentId), held.get(h.instrumentId) ?? 0));
 }
 
-function value({ trade, quantity, cost }: Holding, quote: Quote | undefined, reserved: number): Position {
+function value({ instrumentId, ticker, name, quantity, cost }: Holding, quote: Quote | undefined, reserved: number): Position {
   const close = quote && new Decimal(quote.close);
   const marketValue = close?.times(quantity);
   const totalReturn = marketValue && quantity > 0 && cost.gt(0) ? marketValue.div(cost).minus(1) : undefined;
@@ -58,9 +61,9 @@ function value({ trade, quantity, cost }: Holding, quote: Quote | undefined, res
     ? close.div(quote.previousClose).minus(1)
     : undefined;
   return {
-    instrumentId: trade.instrumentId,
-    ticker: trade.ticker,
-    name: trade.name,
+    instrumentId,
+    ticker,
+    name,
     quantity,
     reservedQuantity: reserved,
     availableQuantity: quantity - reserved,

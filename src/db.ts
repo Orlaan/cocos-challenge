@@ -24,13 +24,12 @@ function sqlFor(manager: EntityManager): Sql {
 
 /**
  * Every transaction is bounded: a lock wait over 3 s or a statement over 5 s fails (→ 503), never hangs.
- * SET LOCAL ends with the transaction, so it is safe behind a transaction-mode pooler (PgBouncer, Neon).
+ * Both are transaction-local (SET LOCAL), so they are safe behind a transaction-mode pooler (PgBouncer, Neon).
  */
 function bounded<T>(ds: DataSource, isolation: 'READ COMMITTED' | 'REPEATABLE READ', work: (sql: Sql) => Promise<T>) {
   return ds.transaction(isolation, async (manager) => {
     const sql = sqlFor(manager);
-    await sql(`SET LOCAL lock_timeout = '3s'`);
-    await sql(`SET LOCAL statement_timeout = '5s'`);
+    await sql(`SELECT set_config('lock_timeout', '3s', true), set_config('statement_timeout', '5s', true)`);
     return work(sql);
   });
 }
@@ -46,13 +45,12 @@ export function snapshot<T>(ds: DataSource, work: (sql: Sql) => Promise<T>): Pro
 }
 
 /**
- * Serialises all money decisions of one user: every order for that user waits here,
+ * Serialises all money decisions of one user: every order for that user waits here, until its transaction ends,
  * so "read available → decide → insert" can never interleave with another order.
+ * The rule this relies on: anything that can spend a user's cash or shares takes this lock first.
+ * Cancel does not need it: it only frees cash or shares.
  */
-export function withUserLock<T>(ds: DataSource, userId: number, work: (sql: Sql) => Promise<T>): Promise<T> {
-  return transaction(ds, async (sql) => {
-    const [user] = await sql('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
-    if (!user) throw new Problem(404, 'USER_NOT_FOUND');
-    return work(sql);
-  });
+export async function lockUser(sql: Sql, userId: number): Promise<void> {
+  const [user] = await sql('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
+  if (!user) throw new Problem(404, 'USER_NOT_FOUND');
 }

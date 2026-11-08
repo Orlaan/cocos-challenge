@@ -1,5 +1,7 @@
 # Cocos Challenge: portfolio, búsqueda y órdenes
 
+*English: a NestJS + Postgres API for the Cocos challenge. Orders of one user are serialised by a Postgres row lock, so cash and shares never go negative under parallel orders (`test/concurrency.e2e-spec.ts`). Docs are in Spanish; code and tests in English.*
+
 API en NestJS + Postgres que resuelve el [enunciado](backend-challenge.md). La parte difícil no son los endpoints: es que el dinero cierre aunque lleguen órdenes en paralelo. Las decisiones, con su alternativa descartada, están en [DECISIONS.md](DECISIONS.md).
 
 ## Lo que devuelve el seed (usuario 1)
@@ -49,7 +51,7 @@ Necesita Docker y Node 22.13+. Los e2e levantan un Postgres con SSL, clonan una 
 | `POST /users/:userId/orders` | Envía una orden. Header opcional `Idempotency-Key` |
 | `POST /users/:userId/orders/:orderId/cancel` | Cancela una orden NEW |
 
-Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En lugar de `size` se puede mandar `amount` (ARS): la API compra la mayor cantidad de acciones enteras que alcanza. `LIMIT` necesita `price`; `MARKET` toma el último `close`. El dinero viaja como string decimal, igual que en las respuestas: `"price": "900.00"`, `"amount": "10000"`.
+Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En lugar de `size` se puede mandar `amount` (ARS): la API compra (o vende) la mayor cantidad de acciones enteras que alcanza. `LIMIT` necesita `price`; `MARKET` toma el último `close`. El dinero viaja como string decimal, igual que en las respuestas: `"price": "900.00"`, `"amount": "10000"`.
 
 ## Qué responde cada caso
 
@@ -57,8 +59,8 @@ Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En
 |---|---|---|
 | MARKET con fondos o acciones | 201 `FILLED` | sí |
 | LIMIT con fondos o acciones (reserva cash o acciones) | 201 `NEW` | sí |
-| Más que el disponible (reservas incluidas), BMA, o MARKET sin precio | 201 `REJECTED` + `reason` | sí |
-| Body inválido, `CASH_IN`/`CASH_OUT`, comprar ARS, monto menor a una acción | 400 | no |
+| Más que el disponible (reservas incluidas), vender BMA, o MARKET sin precio | 201 `REJECTED` + `reason` | sí |
+| Body inválido, `CASH_IN`/`CASH_OUT`, comprar ARS, monto menor a una acción o sin precio para calcularlo | 400 | no |
 | Usuario, instrumento u orden inexistente (u orden de otro usuario) | 404 | no |
 | Cancelar una orden que no está NEW | 409 | no |
 | Misma `Idempotency-Key` con otro body | 422 | no |
@@ -66,41 +68,19 @@ Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En
 | Lock ocupado más de 3 s, sentencia de más de 5 s o pool sin conexiones | 503 + `Retry-After` | no |
 | Error inesperado (base caída, bug) | 500 | desconocido: reintentar sólo con la misma `Idempotency-Key` |
 
-Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable. Cada fila tiene su test; las de 500 y 503 están en `test/failures.e2e-spec.ts` y `test/concurrency.e2e-spec.ts`. Cada REJECTED y cada cancelación quedan en `order_events` con su motivo (D-07).
+Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable. Cada fila tiene su test por HTTP; las de 500 y 503 están en `test/failures.e2e-spec.ts` y `test/concurrency.e2e-spec.ts`. Con `db/local-additions.sql` aplicado, cada REJECTED y cada cancelación quedan en `order_events` con su motivo (D-07); sin él, el motivo queda sólo en la respuesta y el log.
 
 ## Revisar en 15 minutos
 
-La documentación está en español; el código, los comentarios y los tests, en inglés.
-
-1. `src/orders/orders.ts` `place()`: lock → leer → decidir → insertar, en una transacción.
+1. `src/orders/orders.ts` `place()`: lock → leer instrumento, precio y disponible → decidir → insertar, en una transacción.
 2. `src/db.ts`: el lock por usuario y los límites de tiempo de toda transacción.
 3. `src/orders/decide.ts` y `src/portfolio/positions.ts`: las reglas de negocio, puras, con tests unitarios.
-4. `test/concurrency.e2e-spec.ts`: la carrera, probada; `test/harness.ts` `assertInvariants` corre después de cada test.
-
-## Cómo está hecho
-
-```
-src/
-  db.ts            transacción + lock por usuario (SET LOCAL lock_timeout, SELECT … FOR UPDATE)
-  ledger.ts        cash, reservas y acciones derivadas de la tabla orders
-  limits.ts        límites que impone el esquema (INT, NUMERIC(10,2))
-  orders/          decide.ts: la decisión de negocio, pura · orders.ts: lock → leer → decidir → insertar
-  portfolio/       positions.ts: costo promedio ponderado, puro · portfolio.ts: endpoint
-  instruments/     búsqueda
-  problem.ts       errores RFC 9457
-test/              e2e sobre Postgres real, uno por regla
-db/                database.sql (sin cambios) · local-additions.sql (idempotencia, auditoría) · optional-hardening.sql
-```
-
-- **Nada se guarda dos veces.** Cash y posiciones salen de las órdenes en cada lectura (D-02).
-- **Las órdenes del mismo usuario se serializan** en Postgres, así que funciona con varias instancias. Probado: 5 compras paralelas con cash para 4 → 4 FILLED, 1 REJECTED. Sin el lock, el mismo test sobregira (D-04).
-- **Dinero exacto:** `NUMERIC` + `decimal.js`; la API devuelve strings (D-06).
+4. `test/concurrency.e2e-spec.ts`: la carrera, probada; `test/harness.ts` `assertInvariants` corre después de cada test e2e: nadie gastó más cash ni vendió más acciones de las que tenía.
 
 ## Si esto crece
 
-1. Más tráfico: PgBouncer en modo transacción (por eso `SET LOCAL`) e instancias horizontales; el lock sigue en la base.
-2. Muchas órdenes: índices de `optional-hardening.sql`, después una tabla `positions` actualizada en la misma transacción y reconciliada contra `orders`.
-3. Lecturas: réplicas para búsqueda y market data; las validaciones de dinero siempre en el primario.
-4. Market data: cache con límite de antigüedad; los saldos nunca se cachean.
-5. Mercado real: outbox + consumidores idempotentes para enviar órdenes y recibir ejecuciones.
-6. Muchos usuarios: shard por usuario; el lock por usuario ya encaja.
+El camino completo está en cada "A escala" de [DECISIONS.md](DECISIONS.md). Los tres primeros pasos:
+
+1. Límite por usuario en el API Gateway, PgBouncer en modo transacción (por eso `SET LOCAL`) e instancias horizontales; el lock sigue en la base.
+2. Índices de `optional-hardening.sql`; después una tabla `positions` actualizada en la misma transacción y reconciliada contra `orders`.
+3. Shard por usuario: el lock por usuario ya encaja.

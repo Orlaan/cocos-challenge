@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
-import { assertLocalDb, orderCount, startApi, TestApi } from './harness';
+import { assertInvariants, assertLocalDb, orderCount, startApi, TestApi } from './harness';
 
 // The database Cocos provides has only the 4 original tables, and hosted Postgres (Neon) needs SSL.
 // This suite runs the app on exactly that shape: database.sql only, over an SSL connection.
@@ -7,6 +8,7 @@ describe('running on the provided database (original schema, SSL)', () => {
   let api: TestApi;
   beforeAll(async () => (api = await startApi('provided', '?sslmode=no-verify')));
   afterAll(() => api.close());
+  afterEach(() => assertInvariants(api.db));
 
   it('connects over SSL', async () => {
     await api.http().get('/users/1/portfolio').expect(200);
@@ -42,15 +44,19 @@ describe('running on the provided database (original schema, SSL)', () => {
     expect(await orderCount(api.db)).toBe(before);
   });
 
-  it('creating the table later enables the key without a restart', async () => {
-    await api.db.query(`CREATE TABLE idempotency_keys (userid INT NOT NULL, key VARCHAR(255) NOT NULL,
-      request_hash TEXT NOT NULL, response JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (userid, key))`);
+  it('applying db/local-additions.sql later (the deploy step) enables the key without a restart', async () => {
+    await api.db.query(readFileSync('db/local-additions.sql', 'utf8'));
     const body = { instrumentId: 34, side: 'BUY', type: 'MARKET', size: 1 };
     const first = await api.http().post('/users/1/orders').set('Idempotency-Key', 'later').send(body).expect(201);
     const again = await api.http().post('/users/1/orders').set('Idempotency-Key', 'later').send(body).expect(201);
     expect(again.body.id).toBe(first.body.id);
-    await api.db.query('DROP TABLE idempotency_keys');
+  });
+
+  it('db/local-additions.sql can run again: no error, no duplicate audit rows', async () => {
+    const events = async () => Number((await api.db.query('SELECT count(*) FROM order_events')).rows[0].count);
+    const before = await events();
+    await api.db.query(readFileSync('db/local-additions.sql', 'utf8'));
+    expect(await events()).toBe(before);
   });
 
   it('the test harness refuses any non-local database', () => {

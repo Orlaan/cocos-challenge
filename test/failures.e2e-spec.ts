@@ -1,26 +1,22 @@
 import { Client } from 'pg';
-import { POOL_SIZE, transaction } from '../src/db';
-import { toProblem } from '../src/problem';
-import { orderCount, startApi, TestApi } from './harness';
+import { POOL_SIZE } from '../src/db';
+import { assertInvariants, orderCount, startApi, TestApi } from './harness';
 
 // Every failure the README lists has one outcome. Each test below would fail if its mapping broke,
 // including a pg-pool upgrade that changed its timeout message.
+const order = { instrumentId: 34, side: 'BUY', type: 'MARKET', size: 1 };
+
 describe('failure outcomes', () => {
   let api: TestApi;
   beforeAll(async () => (api = await startApi()));
   afterAll(() => api.close());
-
-  it('a statement over 5 s → 503 BUSY (statement_timeout, SQLSTATE 57014)', async () => {
-    const error = await transaction(api.ds, (sql) => sql('SELECT pg_sleep(6)')).catch((e) => e);
-    expect(error.code).toBe('57014');
-    expect(toProblem(error)).toMatchObject({ status: 503, code: 'BUSY' });
-  }, 10000);
+  afterEach(() => assertInvariants(api.db));
 
   it('no pooled connection within 3 s → an order gets 503 + Retry-After, nothing saved', async () => {
     const before = await orderCount(api.db);
     const held = Array.from({ length: POOL_SIZE }, () => api.ds.createQueryRunner());
     await Promise.all(held.map((runner) => runner.connect()));
-    const res = await api.http().post('/users/1/orders').send({ instrumentId: 34, side: 'BUY', type: 'MARKET', size: 1 });
+    const res = await api.http().post('/users/1/orders').send(order);
     await Promise.all(held.map((runner) => runner.release()));
     expect(res.status).toBe(503);
     expect(res.headers['retry-after']).toBe('1');
@@ -28,9 +24,26 @@ describe('failure outcomes', () => {
     expect(await orderCount(api.db)).toBe(before);
   }, 10000);
 
-  it('any other database error → 500 INTERNAL_ERROR, with no internal detail', async () => {
-    const error = await api.ds.query('SELECT * FROM no_such_table').catch((e) => e);
-    expect(toProblem(error)).toEqual(expect.objectContaining({ status: 500, code: 'INTERNAL_ERROR', detail: undefined }));
+  it('an order whose INSERT runs over 5 s → 503, nothing saved', async () => {
+    const other = await startApi();
+    await other.db.query(`CREATE FUNCTION slow() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(6); RETURN NEW; END $$;
+      CREATE TRIGGER slow BEFORE INSERT ON orders FOR EACH ROW EXECUTE FUNCTION slow()`);
+    const before = await orderCount(other.db);
+    const res = await other.http().post('/users/1/orders').send(order);
+    expect(res.status).toBe(503);
+    expect(await orderCount(other.db)).toBe(before);
+    await other.close();
+  }, 15000);
+
+  it('any other database error → 500 INTERNAL_ERROR with no internal detail, nothing saved', async () => {
+    const other = await startApi();
+    await other.db.query('ALTER TABLE instruments RENAME TO instruments_gone');
+    const before = await orderCount(other.db);
+    const res = await other.http().post('/users/1/orders').send(order);
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ type: 'about:blank', title: 'Internal Server Error', status: 500, code: 'INTERNAL_ERROR' });
+    expect(await orderCount(other.db)).toBe(before);
+    await other.close();
   });
 
   it('search is bounded too: a locked instruments table → 503 after 3 s, not a hung request', async () => {

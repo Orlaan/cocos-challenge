@@ -1,9 +1,10 @@
-import { startApi, TestApi } from './harness';
+import { assertInvariants, startApi, TestApi } from './harness';
 
 describe('GET /instruments?q=', () => {
   let api: TestApi;
   beforeAll(async () => (api = await startApi()));
   afterAll(() => api.close());
+  afterEach(() => assertInvariants(api.db));
 
   const search = (q?: string) => api.http().get('/instruments').query(q === undefined ? {} : { q });
   const tickers = async (q: string) => (await search(q).expect(200)).body.map((i: any) => i.ticker);
@@ -34,6 +35,10 @@ describe('GET /instruments?q=', () => {
   it('treats % and _ as plain characters, not wildcards', async () => {
     expect(await tickers('%')).toEqual([]);
     expect(await tickers('_')).toEqual([]);
+  });
+
+  it('returns at most 20 instruments', async () => {
+    expect((await search('a').expect(200)).body).toHaveLength(20);
   });
 
   it('no match → 200 with an empty list', async () => {

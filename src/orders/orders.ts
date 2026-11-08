@@ -2,13 +2,13 @@ import { Body, Controller, Headers, HttpCode, Injectable, Logger, Param, Post, R
 import type { Response } from 'express';
 import Decimal from '../money';
 import { DataSource } from 'typeorm';
-import { Sql, transaction, withUserLock } from '../db';
+import { lockUser, Sql, transaction } from '../db';
 import { IdPipe } from '../id.pipe';
 import { availableShares, cash, latestQuotes } from '../ledger';
 import { Problem } from '../problem';
-import { Book, decide, Reason, shapeError, Status } from './decide';
-import { Idempotency } from './idempotency';
-import { PlaceOrder } from './order.dto';
+import { decide, Reason, Status } from './decide';
+import * as idempotency from './idempotency';
+import { keyError, PlaceOrder, shapeError } from './order.dto';
 
 export interface Order {
   id: number;
@@ -31,31 +31,32 @@ const ORDER_COLUMNS = `id, instrumentid AS "instrumentId", userid AS "userId", s
 export class OrdersService {
   private readonly log = new Logger('Orders');
 
-  constructor(
-    private readonly ds: DataSource,
-    private readonly idempotency: Idempotency,
-  ) {}
+  constructor(private readonly ds: DataSource) {}
 
-  /** Read what the user has, decide, record. All under the user's lock, in one transaction. */
+  /** Lock the user, read the price and what they have, decide, record: one transaction. */
   async place(userId: number, order: PlaceOrder, key?: string): Promise<{ order: Order; replayed: boolean }> {
-    const problem = shapeError(order);
+    const problem = shapeError(order) ?? keyError(key);
     if (problem) throw new Problem(400, 'VALIDATION_ERROR', problem);
     const started = Date.now();
 
-    const result = await withUserLock(this.ds, userId, async (sql) => {
-      const replayed = key && (await this.idempotency.replay<Order>(sql, userId, key, order));
+    const result = await transaction(this.ds, async (sql) => {
+      await lockUser(sql, userId);
+      // A retry gets its first answer, even if the instrument has changed since.
+      const replayed = key ? await idempotency.replay<Order>(sql, userId, key, order) : null;
       if (replayed) return { order: replayed, replayed: true };
 
       const [instrument] = await sql<{ type: string }>('SELECT type FROM instruments WHERE id = $1', [order.instrumentId]);
       if (!instrument) throw new Problem(404, 'INSTRUMENT_NOT_FOUND');
       if (instrument.type === 'MONEDA') throw new Problem(400, 'INSTRUMENT_NOT_TRADABLE', 'ARS is cash, not a tradable asset');
-
-      const decision = decide(order, await this.book(sql, userId, order));
+      // The price is read after the lock wait, so a MARKET order fills at the latest close.
+      const quote = (await latestQuotes(sql, [order.instrumentId])).get(order.instrumentId);
+      const close = quote ? new Decimal(quote.close) : null;
+      const decision = decide(order, { close, available: await this.available(sql, userId, order) });
       if ('invalid' in decision) throw new Problem(400, decision.invalid);
 
       // The audit trigger (db/local-additions.sql) reads the reason from this transaction-local setting.
       if (decision.reason) await sql(`SELECT set_config('app.order_reason', $1, true)`, [decision.reason]);
-      // clock_timestamp(), not now(): the time the order is recorded, after the lock, so time order = lock order.
+      // clock_timestamp(), not now(): the time the order executes, after any lock wait, so it matches the price it used.
       const [saved] = await sql<Order>(
         `INSERT INTO orders (instrumentid, userid, side, type, size, price, status, datetime)
          VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp() AT TIME ZONE 'UTC')
@@ -63,7 +64,7 @@ export class OrdersService {
         [order.instrumentId, userId, order.side, order.type, decision.size, decision.price?.toFixed(2), decision.status],
       );
       const recorded = decision.reason ? { ...saved, reason: decision.reason } : saved;
-      if (key) await this.idempotency.save(sql, userId, key, order, recorded);
+      if (key) await idempotency.save(sql, userId, key, order, recorded);
       return { order: recorded, replayed: false };
     });
 
@@ -72,12 +73,11 @@ export class OrdersService {
     return result;
   }
 
-  /** What the user can spend right now. Sequential: the queries share the transaction's one connection. */
-  private async book(sql: Sql, userId: number, order: PlaceOrder): Promise<Book> {
-    const money = await cash(sql, userId);
-    const quote = (await latestQuotes(sql, [order.instrumentId])).get(order.instrumentId);
-    const shares = order.side === 'SELL' ? await availableShares(sql, userId, order.instrumentId) : 0;
-    return { close: quote ? new Decimal(quote.close) : null, availableCash: money.available, availableShares: shares };
+  /** Cash for a BUY, shares for a SELL: one query, because it runs under the lock. */
+  private async available(sql: Sql, userId: number, order: PlaceOrder): Promise<Decimal> {
+    return order.side === 'BUY'
+      ? (await cash(sql, userId)).available
+      : new Decimal(await availableShares(sql, userId, order.instrumentId));
   }
 
   /**
@@ -85,16 +85,14 @@ export class OrdersService {
    * It needs no user lock: cancelling only frees cash or shares, so an order deciding at the same moment
    * can at worst see less available than there is (it may reject), never more (it cannot overspend).
    */
-  cancel(userId: number, orderId: number): Promise<Order> {
-    return transaction(this.ds, async (sql) => {
+  async cancel(userId: number, orderId: number): Promise<Order> {
+    const cancelled = await transaction(this.ds, async (sql) => {
       const [cancelled] = await sql<Order>(
         `UPDATE orders SET status = 'CANCELLED' WHERE id = $1 AND userid = $2 AND status = 'NEW' RETURNING ${ORDER_COLUMNS}`,
         [orderId, userId],
       );
-      if (cancelled) {
-        this.log.log(JSON.stringify({ event: 'cancel', userId, orderId }));
-        return cancelled;
-      }
+      if (cancelled) return cancelled;
+      // Nothing was cancelled. One query tells why: no user row → unknown user; no order row → not theirs.
       const [found] = await sql<{ status: string | null }>(
         'SELECT o.status FROM users u LEFT JOIN orders o ON o.id = $2 AND o.userid = u.id WHERE u.id = $1',
         [userId, orderId],
@@ -103,6 +101,8 @@ export class OrdersService {
       if (!found.status) throw new Problem(404, 'ORDER_NOT_FOUND');
       throw new Problem(409, 'ORDER_NOT_CANCELLABLE', `Order is ${found.status}; only NEW orders can be cancelled`);
     });
+    this.log.log(JSON.stringify({ event: 'cancel', userId, orderId })); // after the commit
+    return cancelled;
   }
 }
 
@@ -118,9 +118,6 @@ export class OrdersController {
     @Headers('idempotency-key') key: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<Order> {
-    if (key !== undefined && (key.length < 1 || key.length > 255)) {
-      throw new Problem(400, 'VALIDATION_ERROR', 'Idempotency-Key must have 1 to 255 characters');
-    }
     const { order, replayed } = await this.orders.place(userId, body, key);
     if (replayed) res.setHeader('Idempotent-Replayed', 'true');
     return order;
