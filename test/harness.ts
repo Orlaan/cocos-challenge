@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import request from 'supertest';
+import { DataSource } from 'typeorm';
 import { AppModule, DATABASE_URL } from '../src/app.module';
 
 /** Tests may only ever touch a local throwaway database. */
@@ -23,6 +24,7 @@ function urlFor(database: string, query = '') {
 export interface TestApi {
   http: () => ReturnType<typeof request>;
   db: Client;
+  ds: DataSource; // the app's own pool
   url: string;
   close: () => Promise<void>;
 }
@@ -48,6 +50,7 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
   return {
     http: () => request(app.getHttpServer()),
     db,
+    ds: app.get(DataSource),
     url,
     close: async () => {
       await db.end();
@@ -58,6 +61,18 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
 
 export async function orderCount(db: Client): Promise<number> {
   return (await db.query('SELECT count(*)::int AS n FROM orders')).rows[0].n;
+}
+
+/** Waits until `n` connections to this test database are blocked on a lock. */
+export async function waitForLockWaiters(db: Client, n: number) {
+  for (let tries = 0; tries < 100; tries++) {
+    const { rows } = await db.query(
+      `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    );
+    if (rows[0].n >= n) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`Expected ${n} connections waiting on a lock`);
 }
 
 /**

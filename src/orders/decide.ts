@@ -1,4 +1,4 @@
-import Decimal from 'decimal.js';
+import Decimal from '../money';
 import { INT_MAX } from '../limits';
 import type { PlaceOrder } from './order.dto';
 

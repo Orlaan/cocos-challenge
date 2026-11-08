@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import { assertInvariants, startApi, TestApi } from './harness';
+import { assertInvariants, startApi, TestApi, waitForLockWaiters } from './harness';
 
 const GGAL = 34; // close 885.80
 const METR = 54; // user 1 holds 500
@@ -13,7 +13,6 @@ async function holdUserRow(url: string): Promise<Client> {
   await holder.query('SELECT id FROM users WHERE id = 1 FOR UPDATE');
   return holder;
 }
-const settle = () => new Promise((r) => setTimeout(r, 500));
 
 describe('concurrent orders for one user', () => {
   let api: TestApi;
@@ -29,7 +28,7 @@ describe('concurrent orders for one user', () => {
   it('5 parallel BUYs with cash for 4 → exactly 4 FILLED, 1 REJECTED, available never below 0', async () => {
     const holder = await holdUserRow(api.url);
     const pending = Promise.all(Array.from({ length: 5 }, () => send(buy150k)));
-    await settle(); // all 5 are now waiting on the same lock
+    await waitForLockWaiters(api.db, 5); // all 5 are waiting on the same lock
     await holder.query('COMMIT');
     await holder.end();
 
@@ -43,7 +42,7 @@ describe('concurrent orders for one user', () => {
     const holder = await holdUserRow(api.url);
     const sell = { instrumentId: METR, side: 'SELL', type: 'MARKET', size: 120 }; // 4 × 120 ≤ 500 < 5 × 120
     const pending = Promise.all(Array.from({ length: 5 }, () => send(sell)));
-    await settle();
+    await waitForLockWaiters(api.db, 5);
     await holder.query('COMMIT');
     await holder.end();
 
@@ -55,8 +54,8 @@ describe('concurrent orders for one user', () => {
   it('a cancel does not wait for the user lock, and the waiting order then sees the freed cash', async () => {
     const holder = await holdUserRow(api.url);
     // 733 GGAL = 649,291.40: more than the 627,500 available, less than 627,500 + the 90,000 order 7 holds.
-    const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '650000' });
-    await settle();
+    const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '650000' }).then((r) => r); // supertest starts on then()
+    await waitForLockWaiters(api.db, 1);
     await api.http().post('/users/1/orders/7/cancel').expect(200); // not blocked by the held lock
     await holder.query('COMMIT');
     await holder.end();

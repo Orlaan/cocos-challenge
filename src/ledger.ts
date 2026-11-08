@@ -1,4 +1,4 @@
-import Decimal from 'decimal.js';
+import Decimal from './money';
 import { Sql } from './db';
 
 // Everything a user owns is derived from the `orders` log on each read; nothing is stored twice.
@@ -27,27 +27,27 @@ export async function cash(sql: Sql, userId: number): Promise<Cash> {
 
 /** Shares the user can still sell: filled holdings minus shares held by NEW SELL orders. */
 export async function availableShares(sql: Sql, userId: number, instrumentId: number): Promise<number> {
-  const [row] = await sql<{ shares: number }>(
+  const [row] = await sql<{ shares: string }>(
     `SELECT COALESCE(SUM(CASE
        WHEN status = 'FILLED' AND side = 'BUY' THEN size
-       WHEN status IN ('FILLED', 'NEW') AND side = 'SELL' THEN -size END), 0)::int AS shares
+       WHEN status IN ('FILLED', 'NEW') AND side = 'SELL' THEN -size END), 0) AS shares
      FROM orders
      WHERE userid = $1 AND instrumentid = $2`,
     [userId, instrumentId],
   );
-  return row.shares;
+  return Number(row.shares); // a SUM of INT is BIGINT (a string in pg): sums can pass the INT range
 }
 
 /** Shares held by NEW SELL orders, per instrument. */
 export async function heldShares(sql: Sql, userId: number): Promise<Map<number, number>> {
-  const rows = await sql<{ instrumentId: number; shares: number }>(
-    `SELECT instrumentid AS "instrumentId", SUM(size)::int AS shares
+  const rows = await sql<{ instrumentId: number; shares: string }>(
+    `SELECT instrumentid AS "instrumentId", SUM(size) AS shares
      FROM orders
      WHERE userid = $1 AND status = 'NEW' AND side = 'SELL'
      GROUP BY instrumentid`,
     [userId],
   );
-  return new Map(rows.map((r) => [r.instrumentId, r.shares]));
+  return new Map(rows.map((r) => [r.instrumentId, Number(r.shares)]));
 }
 
 export interface Trade {

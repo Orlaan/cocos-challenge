@@ -1,5 +1,5 @@
 import { Controller, Get, Injectable, Param } from '@nestjs/common';
-import Decimal from 'decimal.js';
+import Decimal from '../money';
 import { DataSource } from 'typeorm';
 import { snapshot } from '../db';
 import { cash, filledTrades, heldShares, latestQuotes } from '../ledger';
@@ -20,10 +20,13 @@ export class PortfolioService {
       const trades = await filledTrades(sql, userId);
       const quotes = await latestQuotes(sql, [...new Set(trades.map((t) => t.instrumentId))]);
       const positions = foldPositions(trades, quotes, await heldShares(sql, userId));
+      // The total adds the positions that have a price and lists the ones that do not,
+      // so a partial total never looks complete.
       const total = positions.reduce((sum, p) => sum.plus(p.marketValue ?? 0), money.balance);
       return {
         userId,
         totalValue: total.toFixed(2),
+        unpricedInstrumentIds: positions.filter((p) => p.marketValue === null).map((p) => p.instrumentId),
         cash: {
           balance: money.balance.toFixed(2),
           reserved: money.reserved.toFixed(2),

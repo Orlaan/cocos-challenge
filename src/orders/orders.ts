@@ -1,6 +1,6 @@
 import { Body, Controller, Headers, HttpCode, Injectable, Logger, Param, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import Decimal from 'decimal.js';
+import Decimal from '../money';
 import { DataSource } from 'typeorm';
 import { Sql, transaction, withUserLock } from '../db';
 import { IdPipe } from '../id.pipe';
@@ -40,10 +40,6 @@ export class OrdersService {
   async place(userId: number, order: PlaceOrder, key?: string): Promise<{ order: Order; replayed: boolean }> {
     const problem = shapeError(order);
     if (problem) throw new Problem(400, 'VALIDATION_ERROR', problem);
-    if (key !== undefined && !(await this.idempotency.available())) {
-      // Never accept a retry-safety promise we cannot keep.
-      throw new Problem(501, 'IDEMPOTENCY_UNAVAILABLE', 'Idempotency-Key needs db/local-additions.sql on this database');
-    }
     const started = Date.now();
 
     const result = await withUserLock(this.ds, userId, async (sql) => {
@@ -57,6 +53,8 @@ export class OrdersService {
       const decision = decide(order, await this.book(sql, userId, order));
       if ('invalid' in decision) throw new Problem(400, decision.invalid);
 
+      // The audit trigger (db/local-additions.sql) reads the reason from this transaction-local setting.
+      if (decision.reason) await sql(`SELECT set_config('app.order_reason', $1, true)`, [decision.reason]);
       // clock_timestamp(), not now(): the time the order is recorded, after the lock, so time order = lock order.
       const [saved] = await sql<Order>(
         `INSERT INTO orders (instrumentid, userid, side, type, size, price, status, datetime)
@@ -94,7 +92,7 @@ export class OrdersService {
         [orderId, userId],
       );
       if (cancelled) {
-        this.log.log(JSON.stringify({ event: 'cancel', userId, orderId, from: 'NEW' }));
+        this.log.log(JSON.stringify({ event: 'cancel', userId, orderId }));
         return cancelled;
       }
       const [found] = await sql<{ status: string | null }>(

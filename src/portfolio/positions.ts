@@ -1,4 +1,4 @@
-import Decimal from 'decimal.js';
+import Decimal from '../money';
 import type { Quote, Trade } from '../ledger';
 
 export interface Position {
@@ -30,13 +30,18 @@ export function foldPositions(trades: Trade[], quotes: Map<number, Quote>, held 
   for (const t of trades) {
     const h = holdings.get(t.instrumentId) ?? { trade: t, quantity: 0, cost: new Decimal(0) };
     if (t.side === 'BUY') {
-      const quantity = h.quantity + t.size;
-      h.cost = h.quantity > 0 ? h.cost.plus(new Decimal(t.price).times(t.size)) : new Decimal(t.price).times(Math.max(quantity, 0));
-      h.quantity = quantity;
+      if (h.quantity > 0) {
+        h.cost = h.cost.plus(new Decimal(t.price).times(t.size)); // re-average
+      } else {
+        // From flat or short (seed BMA −10), only the shares left after this buy carry a cost.
+        h.cost = new Decimal(t.price).times(Math.max(h.quantity + t.size, 0));
+      }
+      h.quantity += t.size;
     } else {
-      const quantity = h.quantity - t.size;
-      h.cost = quantity > 0 ? h.cost.div(h.quantity).times(quantity) : new Decimal(0);
-      h.quantity = quantity;
+      // A sale keeps the average price: the shares left keep their part of the cost.
+      const left = h.quantity - t.size;
+      h.cost = left > 0 ? h.cost.times(left).div(h.quantity) : new Decimal(0);
+      h.quantity = left;
     }
     holdings.set(t.instrumentId, h);
   }

@@ -30,7 +30,7 @@ npm ci
 DATABASE_URL='postgres://usuario:clave@host/base?sslmode=require' npm run start:dev
 ```
 
-La app no crea ni migra nada en esa base. Sin la tabla de idempotencia (`db/local-additions.sql`), una request con `Idempotency-Key` recibe 501 en lugar de un reintento inseguro; quien opere la base puede crearla con `psql "$DATABASE_URL" -f db/local-additions.sql`, sin reiniciar la API.
+La app no crea ni migra nada en esa base. Sin la tabla de idempotencia (`db/local-additions.sql`), una request con `Idempotency-Key` recibe 501 en lugar de un reintento inseguro; el paso de deploy recomendado es `psql "$DATABASE_URL" -f db/local-additions.sql` (aditivo, se puede repetir, sin reiniciar la API).
 
 ## Verificar
 
@@ -44,7 +44,7 @@ Necesita Docker y Node 22.13+. Los e2e levantan un Postgres con SSL, clonan una 
 
 | Método y ruta | Qué hace |
 |---|---|
-| `GET /users/:userId/portfolio` | Valor total, cash (saldo, reservado, disponible) y posiciones con cantidad (total, reservada, disponible), valor, rendimiento total y diario |
+| `GET /users/:userId/portfolio` | Valor total, cash (saldo, reservado, disponible) y posiciones con cantidad (total, reservada, disponible), valor, rendimiento total y diario. `unpricedInstrumentIds` lista las posiciones que el total no pudo valuar |
 | `GET /instruments?q=gal` | Busca parcial por ticker o nombre; ticker exacto primero; ARS no aparece |
 | `POST /users/:userId/orders` | Envía una orden. Header opcional `Idempotency-Key` |
 | `POST /users/:userId/orders/:orderId/cancel` | Cancela una orden NEW |
@@ -66,9 +66,11 @@ Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En
 | Lock ocupado más de 3 s, sentencia de más de 5 s o pool sin conexiones | 503 + `Retry-After` | no |
 | Error inesperado (base caída, bug) | 500 | desconocido: reintentar sólo con la misma `Idempotency-Key` |
 
-Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable.
+Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable. Cada fila tiene su test; las de 500 y 503 están en `test/failures.e2e-spec.ts` y `test/concurrency.e2e-spec.ts`. Cada REJECTED y cada cancelación quedan en `order_events` con su motivo (D-07).
 
 ## Revisar en 15 minutos
+
+La documentación está en español; el código, los comentarios y los tests, en inglés.
 
 1. `src/orders/orders.ts` `place()`: lock → leer → decidir → insertar, en una transacción.
 2. `src/db.ts`: el lock por usuario y los límites de tiempo de toda transacción.
@@ -87,13 +89,12 @@ src/
   instruments/     búsqueda
   problem.ts       errores RFC 9457
 test/              e2e sobre Postgres real, uno por regla
-db/                database.sql (sin cambios) · local-additions.sql · optional-hardening.sql
+db/                database.sql (sin cambios) · local-additions.sql (idempotencia, auditoría) · optional-hardening.sql
 ```
 
 - **Nada se guarda dos veces.** Cash y posiciones salen de las órdenes en cada lectura (D-02).
 - **Las órdenes del mismo usuario se serializan** en Postgres, así que funciona con varias instancias. Probado: 5 compras paralelas con cash para 4 → 4 FILLED, 1 REJECTED. Sin el lock, el mismo test sobregira (D-04).
 - **Dinero exacto:** `NUMERIC` + `decimal.js`; la API devuelve strings (D-06).
-- **El núcleo es puro:** `decide.ts` y `positions.ts` no conocen HTTP ni SQL y tienen tests unitarios propios.
 
 ## Si esto crece
 

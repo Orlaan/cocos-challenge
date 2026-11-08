@@ -1,36 +1,28 @@
 import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { DataSource } from 'typeorm';
 import { Sql } from '../db';
+import Decimal from '../money';
 import { Problem } from '../problem';
 import type { PlaceOrder } from './order.dto';
 
 /**
  * Idempotency-Key support, stored in `idempotency_keys` (db/local-additions.sql).
  * Lookups run inside the user lock, so two requests with the same key can never both insert.
- * The table is an additive change (db/local-additions.sql). On a database without it (the provided one),
- * a request with the header gets 501: the API never pretends a retry is safe.
+ * On a database without the table (the provided one), a request with the header gets 501:
+ * the API never pretends a retry is safe.
  */
 @Injectable()
 export class Idempotency {
-  private tableExists = false; // once seen, it stays: the check runs only until the table appears
-
-  constructor(private readonly ds: DataSource) {}
-
-  async available(): Promise<boolean> {
-    if (!this.tableExists) {
-      const [row] = await this.ds.query(`SELECT to_regclass('idempotency_keys') IS NOT NULL AS exists`);
-      this.tableExists = row.exists;
-    }
-    return this.tableExists;
-  }
-
   /** The stored response for a repeated key, or null for a new key. Same key with another body → 422. */
   async replay<T>(sql: Sql, userId: number, key: string, order: PlaceOrder): Promise<T | null> {
     const [row] = await sql<{ requestHash: string; response: T }>(
       `SELECT request_hash AS "requestHash", response FROM idempotency_keys WHERE userid = $1 AND key = $2`,
       [userId, key],
-    );
+    ).catch((error) => {
+      // 42P01 = undefined table. The transaction rolls back: nothing is saved.
+      if (error.code === '42P01') throw new Problem(501, 'IDEMPOTENCY_UNAVAILABLE', 'Idempotency-Key needs db/local-additions.sql on this database');
+      throw error;
+    });
     if (!row) return null;
     if (row.requestHash !== hash(order)) throw new Problem(422, 'IDEMPOTENCY_KEY_REUSED', 'This key was used with another request body');
     return row.response;
@@ -46,7 +38,10 @@ export class Idempotency {
   }
 }
 
+// "10000" and "10000.00" are the same order, so money is hashed in one spelling.
+const money = (x?: string) => (x === undefined ? null : new Decimal(x).toFixed(2));
+
 function hash(o: PlaceOrder): string {
-  const fields = [o.instrumentId, o.side, o.type, o.size ?? null, o.amount ?? null, o.price ?? null];
+  const fields = [o.instrumentId, o.side, o.type, o.size ?? null, money(o.amount), money(o.price)];
   return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
 }

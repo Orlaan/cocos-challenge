@@ -87,6 +87,27 @@ describe('POST /users/:userId/orders', () => {
     });
   });
 
+  describe('audit trail (order_events, db/local-additions.sql)', () => {
+    const events = async (orderId: number) =>
+      (await api.db.query('SELECT status, reason FROM order_events WHERE orderid = $1 ORDER BY id', [orderId])).rows;
+
+    it('a REJECTED order keeps its reason in the database', async () => {
+      const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 100000 }).expect(201);
+      expect(await events(res.body.id)).toEqual([{ status: 'REJECTED', reason: 'INSUFFICIENT_FUNDS' }]);
+    });
+
+    it('a seed order cancelled now keeps its history too: NEW, then CANCELLED', async () => {
+      await api.http().post('/users/1/orders/5/cancel').expect(200);
+      expect(await events(5)).toEqual([{ status: 'NEW', reason: null }, { status: 'CANCELLED', reason: null }]);
+    });
+
+    it('a cancel keeps the earlier status: NEW, then CANCELLED', async () => {
+      const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'LIMIT', size: 1, price: '800.00' }).expect(201);
+      await api.http().post(`/users/1/orders/${res.body.id}/cancel`).expect(200);
+      expect(await events(res.body.id)).toEqual([{ status: 'NEW', reason: null }, { status: 'CANCELLED', reason: null }]);
+    });
+  });
+
   describe('invalid requests → 400, nothing saved', () => {
     const base = { instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 };
     it.each([

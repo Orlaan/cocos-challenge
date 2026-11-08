@@ -1,4 +1,4 @@
-import Decimal from 'decimal.js';
+import Decimal from '../money';
 import { decide, shapeError } from './decide';
 import type { PlaceOrder } from './order.dto';
 

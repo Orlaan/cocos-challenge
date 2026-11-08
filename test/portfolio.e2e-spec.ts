@@ -29,9 +29,21 @@ describe('GET /users/:userId/portfolio', () => {
     expect(res.body).toEqual({
       userId,
       totalValue: '0.00',
+      unpricedInstrumentIds: [],
       cash: { balance: '0.00', reserved: '0.00', available: '0.00' },
       positions: [],
     });
+  });
+
+  it('a position with no market price → value null, left out of the total, and listed as unpriced', async () => {
+    const other = await startApi();
+    await other.db.query(`INSERT INTO orders (instrumentid, userid, size, price, side, status, type, datetime) VALUES
+      (66, 2, 1000, 1, 'CASH_IN', 'FILLED', 'MARKET', now()), (3, 2, 1, 100, 'BUY', 'FILLED', 'MARKET', now())`); // 3 = PGR
+    const res = await other.http().get('/users/2/portfolio').expect(200);
+    expect(res.body.totalValue).toBe('900.00'); // the cash; PGR cannot be valued
+    expect(res.body.unpricedInstrumentIds).toEqual([3]);
+    expect(res.body.positions).toEqual([expect.objectContaining({ ticker: 'PGR', quantity: 1, marketValue: null })]);
+    await other.close();
   });
 
   it('unknown user → 404 USER_NOT_FOUND as problem+json', async () => {

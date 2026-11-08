@@ -4,6 +4,8 @@ import { Problem } from './problem';
 /** Runs one parameterised statement and returns its rows (also for UPDATE … RETURNING). */
 export type Sql = <T = any>(text: string, params?: unknown[]) => Promise<T[]>;
 
+export const POOL_SIZE = 10;
+
 export function createDataSource(url: string): Promise<DataSource> {
   // SSL comes from the URL (`?sslmode=require` for Neon). The schema is never synchronised or migrated.
   // A request that cannot get a pooled connection in 3 s fails fast (503) instead of queueing forever.
@@ -12,7 +14,7 @@ export function createDataSource(url: string): Promise<DataSource> {
     url,
     synchronize: false,
     migrationsRun: false,
-    extra: { max: 10, connectionTimeoutMillis: 3000 },
+    extra: { max: POOL_SIZE, connectionTimeoutMillis: 3000 },
   }).initialize();
 }
 

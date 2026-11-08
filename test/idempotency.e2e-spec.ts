@@ -35,6 +35,13 @@ describe('Idempotency-Key on POST /users/:userId/orders', () => {
     expect(again.body.reason).toBe('INSUFFICIENT_FUNDS');
   });
 
+  it('the same money in another spelling is the same request ("10000" = "10000.00")', async () => {
+    const byAmount = { instrumentId: GGAL, side: 'BUY', type: 'MARKET' };
+    const first = await send({ ...byAmount, amount: '10000' }, 'spelling').expect(201);
+    const again = await send({ ...byAmount, amount: '10000.00' }, 'spelling').expect(201);
+    expect(again.body.id).toBe(first.body.id);
+  });
+
   it('same key with another body → 422 IDEMPOTENCY_KEY_REUSED, nothing saved', async () => {
     await send(order, 'k').expect(201);
     const before = await orderCount(api.db);
