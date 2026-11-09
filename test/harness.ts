@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
-import { AppModule, DATABASE_URL } from '../src/app.module';
+import { AppModule } from '../src/app.module';
+import { createDataSource } from '../src/db';
 
 /** Tests may only ever touch a local throwaway database. */
 export function assertLocalDb(url: string) {
@@ -26,7 +27,7 @@ export interface TestApi {
   db: Client;
   ds: DataSource; // the app's own pool
   url: string;
-  close: () => Promise<void>;
+  close: (checkInvariants?: boolean) => Promise<void>;
 }
 
 /** A fresh copy of the seed and the real app on top of it. */
@@ -40,8 +41,8 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
   const url = urlFor(name, urlQuery);
   assertLocalDb(url);
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(DATABASE_URL)
-    .useValue(url)
+    .overrideProvider(DataSource)
+    .useFactory({ factory: () => createDataSource(url) })
     .compile();
   const app: INestApplication = moduleRef.createNestApplication({ logger: false });
   await app.init();
@@ -52,8 +53,8 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
     db,
     ds: app.get(DataSource),
     url,
-    close: async () => {
-      await assertInvariants(db);
+    close: async (checkInvariants = true) => {
+      if (checkInvariants) await assertInvariants(db); // every test database is checked before it goes away
       await db.end();
       await app.close();
     },
@@ -69,7 +70,7 @@ export async function holdUserRow(url: string): Promise<Client> {
   const holder = new Client({ connectionString: url.split('?')[0] });
   await holder.connect();
   await holder.query('BEGIN');
-  await holder.query('SELECT id FROM users WHERE id = 1 FOR UPDATE');
+  await holder.query('SELECT id FROM users WHERE id = 1 FOR UPDATE'); // also blocks the INSERT's foreign-key check: the worst interleaving
   return holder;
 }
 
@@ -86,28 +87,33 @@ export async function waitForLockWaiters(db: Client, n: number) {
 }
 
 /**
- * Money invariants that must hold after every test: no user can spend cash they do not have,
- * and no user can sell shares they do not have. The seed's own BMA −10 (user 1) predates the API.
+ * Money invariants, replayed over every status each order has had, in the order it happened: no user ever
+ * spent cash or sold shares they did not have, counting what NEW orders held at the time (a later deposit
+ * or cancel cannot hide it). Without the audit log (the provided database) only current statuses exist.
  */
-export async function assertInvariants(db: Client) {
-  const overspent = await db.query(`
-    SELECT userid FROM (
-      SELECT userid, SUM(CASE
-        WHEN status = 'FILLED' AND side IN ('CASH_IN', 'SELL') THEN size * price
-        WHEN status = 'FILLED' AND side IN ('CASH_OUT', 'BUY') THEN -size * price
-        WHEN status = 'NEW' AND side = 'BUY' THEN -size * price
-        ELSE 0 END) AS available
-      FROM orders GROUP BY userid) t
-    WHERE available < 0`);
-  expect(overspent.rows).toEqual([]);
+const SEED_BMA_OVERSELL = 11; // seed order 11 sold 30 BMA with 20 bought, before the API existed
 
-  const oversold = await db.query(`
-    SELECT userid, instrumentid FROM orders
-    WHERE side IN ('BUY', 'SELL')
-    GROUP BY userid, instrumentid
-    HAVING SUM(CASE
-      WHEN status = 'FILLED' AND side = 'BUY' THEN size
-      WHEN status IN ('FILLED', 'NEW') AND side = 'SELL' THEN -size
-      ELSE 0 END) < CASE WHEN userid = 1 AND instrumentid = 31 THEN -10 ELSE 0 END`);
-  expect(oversold.rows).toEqual([]);
+export async function assertInvariants(db: Client) {
+  const [{ audited }] = (await db.query(`SELECT to_regclass('order_events') IS NOT NULL AS audited`)).rows;
+  const history = audited ? 'SELECT id, orderid, status FROM order_events' : 'SELECT id, id AS orderid, status FROM orders';
+  const { rows } = await db.query(`
+    WITH holds AS ( -- what an order moves or holds while it has this status
+      SELECT h.id, h.orderid, o.userid, o.instrumentid,
+        CASE WHEN h.status = 'FILLED' AND o.side IN ('CASH_IN', 'SELL') THEN o.size * o.price
+             WHEN h.status = 'FILLED' AND o.side IN ('CASH_OUT', 'BUY') THEN -o.size * o.price
+             WHEN h.status = 'NEW' AND o.side = 'BUY' THEN -o.size * o.price ELSE 0 END AS cash,
+        CASE WHEN h.status = 'FILLED' AND o.side = 'BUY' THEN o.size
+             WHEN h.status IN ('FILLED', 'NEW') AND o.side = 'SELL' THEN -o.size ELSE 0 END AS shares
+      FROM (${history}) h JOIN orders o ON o.id = h.orderid),
+    moves AS ( -- a status change moves the difference from the order's previous status
+      SELECT *, cash - COALESCE(LAG(cash) OVER w, 0) AS dcash, shares - COALESCE(LAG(shares) OVER w, 0) AS dshares
+      FROM holds WINDOW w AS (PARTITION BY orderid ORDER BY id)),
+    running AS (
+      SELECT *, SUM(dcash) OVER (PARTITION BY userid ORDER BY id) AS available,
+                SUM(dshares) OVER (PARTITION BY userid, instrumentid ORDER BY id) AS owned
+      FROM moves)
+    SELECT orderid, userid, available, owned FROM running
+    WHERE available < 0
+       OR (dshares < 0 AND owned < 0 AND orderid <> ${SEED_BMA_OVERSELL})`);
+  expect(rows).toEqual([]);
 }

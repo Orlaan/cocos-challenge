@@ -71,6 +71,25 @@ describe('Idempotency-Key on POST /users/:userId/orders', () => {
     expect(res.headers['idempotent-replayed']).toBeUndefined();
   });
 
+  it('a response lost after commit: the retry with the same key gets that order, not a second one', async () => {
+    const before = await orderCount(api.db);
+    const holder = await holdUserRow(api.url);
+    const lost = send(order, 'lost').timeout(1000).catch((e) => e); // the client gives up while the order waits
+    await waitForLockWaiters(api.db, 1);
+    expect((await lost).code).toBe('ECONNABORTED');
+    await holder.query('COMMIT'); // the server goes on and commits
+    await holder.end();
+    const deadline = Date.now() + 5000;
+    while ((await orderCount(api.db)) === before) {
+      if (Date.now() > deadline) throw new Error('the abandoned order never committed');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const retry = await send(order, 'lost').expect(201);
+    expect(retry.headers['idempotent-replayed']).toBe('true');
+    expect(await orderCount(api.db)).toBe(before + 1);
+  });
+
   it('no key → every request is a new order', async () => {
     const before = await orderCount(api.db);
     await send(order).expect(201);

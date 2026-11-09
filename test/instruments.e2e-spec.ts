@@ -1,10 +1,9 @@
-import { assertInvariants, startApi, TestApi } from './harness';
+import { startApi, TestApi } from './harness';
 
 describe('GET /instruments?q=', () => {
   let api: TestApi;
   beforeAll(async () => (api = await startApi()));
   afterAll(() => api.close());
-  afterEach(() => assertInvariants(api.db));
 
   const search = (q?: string) => api.http().get('/instruments').query(q === undefined ? {} : { q });
   const tickers = async (q: string) => (await search(q).expect(200)).body.map((i: any) => i.ticker);

@@ -7,8 +7,6 @@ import { OrdersController, OrdersService } from './orders/orders';
 import { PortfolioController, PortfolioService } from './portfolio/portfolio';
 import { Problem, ProblemFilter } from './problem';
 
-export const DATABASE_URL = Symbol('DATABASE_URL');
-
 const validation = new ValidationPipe({
   whitelist: true,
   forbidNonWhitelisted: true,
@@ -20,8 +18,7 @@ const validation = new ValidationPipe({
 @Module({
   controllers: [PortfolioController, InstrumentsController, OrdersController],
   providers: [
-    { provide: DATABASE_URL, useFactory: () => process.env.DATABASE_URL },
-    { provide: DataSource, inject: [DATABASE_URL], useFactory: (url: string) => createDataSource(url) },
+    { provide: DataSource, useFactory: () => createDataSource(process.env.DATABASE_URL!) },
     { provide: APP_PIPE, useValue: validation },
     { provide: APP_FILTER, useClass: ProblemFilter },
     PortfolioService,

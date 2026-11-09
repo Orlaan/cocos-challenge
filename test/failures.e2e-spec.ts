@@ -1,6 +1,7 @@
 import { Client } from 'pg';
 import { POOL_SIZE } from '../src/db';
-import { assertInvariants, orderCount, startApi, TestApi } from './harness';
+import * as ledger from '../src/ledger';
+import { orderCount, startApi, TestApi } from './harness';
 
 // Every failure the README lists has one outcome. Each test below would fail if its mapping broke,
 // including a pg-pool upgrade that changed its timeout message.
@@ -10,7 +11,6 @@ describe('failure outcomes', () => {
   let api: TestApi;
   beforeAll(async () => (api = await startApi()));
   afterAll(() => api.close());
-  afterEach(() => assertInvariants(api.db));
 
   it('no pooled connection within 3 s → an order gets 503 + Retry-After, nothing saved', async () => {
     const before = await orderCount(api.db);
@@ -34,6 +34,24 @@ describe('failure outcomes', () => {
     expect(await orderCount(other.db)).toBe(before);
     await other.close();
   }, 15000);
+
+  it('an order stalled in Node over 2 s → 503, nothing saved; the next order of that user does not wait for it', async () => {
+    const before = await orderCount(api.db);
+    let stalledAtQuote!: () => void;
+    const holdsLock = new Promise<void>((resolve) => (stalledAtQuote = resolve));
+    const real = ledger.latestQuotes;
+    jest.spyOn(ledger, 'latestQuotes').mockImplementationOnce(async (...args) => {
+      stalledAtQuote();
+      await new Promise((resolve) => setTimeout(resolve, 4000)); // idle in transaction, holding the user lock
+      return real(...args);
+    });
+    const stalled = api.http().post('/users/1/orders').send(order).then((r) => r);
+    await holdsLock;
+    const next = await api.http().post('/users/1/orders').send(order); // waits under 3 s, so no 503
+    expect(next.status).toBe(201);
+    expect((await stalled).status).toBe(503);
+    expect(await orderCount(api.db)).toBe(before + 1);
+  }, 10000);
 
   it('any other database error → 500 INTERNAL_ERROR with no internal detail, nothing saved', async () => {
     const other = await startApi();

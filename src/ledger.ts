@@ -1,8 +1,20 @@
 import Decimal from './money';
 import { Sql } from './db';
+import { Problem } from './problem';
 
 // Everything a user owns is derived from the `orders` log on each read; nothing is stored twice.
 // FILLED orders move cash and shares. NEW (LIMIT) orders only hold them until they are cancelled.
+
+/**
+ * Serialises all money decisions of one user: every order for that user waits here, until its transaction ends,
+ * so "read available → decide → insert" can never interleave with another order.
+ * The rule this relies on: anything that can spend a user's cash or shares takes this lock first.
+ * Cancel does not need it: it only frees cash or shares.
+ */
+export async function lockUser(sql: Sql, userId: number): Promise<void> {
+  const [user] = await sql('SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE', [userId]);
+  if (!user) throw new Problem(404, 'USER_NOT_FOUND');
+}
 
 export interface Cash {
   balance: Decimal;
@@ -65,7 +77,7 @@ export function filledTrades(sql: Sql, userId: number): Promise<Trade[]> {
     `SELECT o.instrumentid AS "instrumentId", i.ticker, i.name, o.side, o.size, o.price
      FROM orders o JOIN instruments i ON i.id = o.instrumentid
      WHERE o.userid = $1 AND o.status = 'FILLED' AND o.side IN ('BUY', 'SELL')
-     ORDER BY o.datetime, o.id`,
+     ORDER BY o.id`, // under the user lock, insert order is execution order
     [userId],
   );
 }

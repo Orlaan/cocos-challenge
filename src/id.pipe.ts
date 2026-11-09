@@ -6,8 +6,9 @@ import { Problem } from './problem';
 @Injectable()
 export class IdPipe implements PipeTransform<string, number> {
   transform(value: string): number {
-    const id = /^[1-9]\d{0,9}$/.test(value) ? Number.parseInt(value, 10) : NaN;
-    if (!(id <= INT_MAX)) throw new Problem(400, 'VALIDATION_ERROR', `Invalid id: ${value}`);
-    return id;
+    if (!/^[1-9]\d{0,9}$/.test(value) || Number(value) > INT_MAX) {
+      throw new Problem(400, 'VALIDATION_ERROR', `Invalid id: ${value}`);
+    }
+    return Number(value);
   }
 }

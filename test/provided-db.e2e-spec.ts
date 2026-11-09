@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
-import { assertInvariants, assertLocalDb, orderCount, startApi, TestApi } from './harness';
+import { assertLocalDb, orderCount, startApi, TestApi } from './harness';
 
 // The database Cocos provides has only the 4 original tables, and hosted Postgres (Neon) needs SSL.
 // This suite runs the app on exactly that shape: database.sql only, over an SSL connection.
@@ -8,7 +8,6 @@ describe('running on the provided database (original schema, SSL)', () => {
   let api: TestApi;
   beforeAll(async () => (api = await startApi('provided', '?sslmode=no-verify')));
   afterAll(() => api.close());
-  afterEach(() => assertInvariants(api.db));
 
   it('connects over SSL', async () => {
     await api.http().get('/users/1/portfolio').expect(200);

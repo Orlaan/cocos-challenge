@@ -1,5 +1,4 @@
 import { DataSource, EntityManager } from 'typeorm';
-import { Problem } from './problem';
 
 /** Runs one parameterised statement and returns its rows (also for UPDATE … RETURNING). */
 export type Sql = <T = any>(text: string, params?: unknown[]) => Promise<T[]>;
@@ -24,12 +23,15 @@ function sqlFor(manager: EntityManager): Sql {
 
 /**
  * Every transaction is bounded: a lock wait over 3 s or a statement over 5 s fails (→ 503), never hangs.
- * Both are transaction-local (SET LOCAL), so they are safe behind a transaction-mode pooler (PgBouncer, Neon).
+ * A transaction left idle over 2 s (Node stalled between two queries) is ended by Postgres, so it cannot keep
+ * a user's lock. 2 s is far above any pause between two queries of one order, and below the 3 s lock wait:
+ * an order queued behind a stalled one still runs instead of getting 503. All are transaction-local (SET LOCAL), so they are safe behind a transaction-mode pooler.
  */
 function bounded<T>(ds: DataSource, isolation: 'READ COMMITTED' | 'REPEATABLE READ', work: (sql: Sql) => Promise<T>) {
   return ds.transaction(isolation, async (manager) => {
     const sql = sqlFor(manager);
-    await sql(`SELECT set_config('lock_timeout', '3s', true), set_config('statement_timeout', '5s', true)`);
+    await sql(`SELECT set_config('lock_timeout', '3s', true), set_config('statement_timeout', '5s', true),
+      set_config('idle_in_transaction_session_timeout', '2s', true)`);
     return work(sql);
   });
 }
@@ -42,15 +44,4 @@ export function transaction<T>(ds: DataSource, work: (sql: Sql) => Promise<T>): 
 /** One consistent snapshot for reads that combine several queries. */
 export function snapshot<T>(ds: DataSource, work: (sql: Sql) => Promise<T>): Promise<T> {
   return bounded(ds, 'REPEATABLE READ', work);
-}
-
-/**
- * Serialises all money decisions of one user: every order for that user waits here, until its transaction ends,
- * so "read available → decide → insert" can never interleave with another order.
- * The rule this relies on: anything that can spend a user's cash or shares takes this lock first.
- * Cancel does not need it: it only frees cash or shares.
- */
-export async function lockUser(sql: Sql, userId: number): Promise<void> {
-  const [user] = await sql('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
-  if (!user) throw new Problem(404, 'USER_NOT_FOUND');
 }

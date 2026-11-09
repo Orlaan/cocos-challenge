@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, Logger } from '@nestjs/common';
 import type { Response } from 'express';
 import { STATUS_CODES } from 'node:http';
+import { QueryRunnerAlreadyReleasedError } from 'typeorm';
 
 /** An error the API returns on purpose, with a stable `code` the client can switch on. */
 export class Problem extends Error {
@@ -16,6 +17,17 @@ export class Problem extends Error {
 // Overload, not a bug: the client should retry. 55P03 = lock_timeout, 57014 = statement_timeout.
 const BUSY_SQLSTATES = ['55P03', '57014'];
 const POOL_TIMEOUT = /timeout exceeded when trying to connect/;
+
+/** Why a request failed without saving anything, so a retry is safe; undefined for any other error. */
+function busyCause(error: unknown): string | undefined {
+  const { code, message } = (error ?? {}) as { code?: string; message?: string };
+  if (BUSY_SQLSTATES.includes(code ?? '')) return code;
+  if (POOL_TIMEOUT.test(message ?? '')) return 'pool';
+  // Postgres ended a transaction left idle over 2 s (src/db.ts); its next query finds the connection gone.
+  // Our queries run only inside the transaction, before COMMIT, so nothing was saved. Guarded by the
+  // "stalled in Node" test in test/failures.e2e-spec.ts: a TypeORM upgrade that changes this error fails it.
+  if (error instanceof QueryRunnerAlreadyReleasedError) return 'idle';
+}
 
 const log = new Logger('ProblemFilter');
 
@@ -41,9 +53,9 @@ export function toProblem(error: unknown): Problem {
     const code = status === 400 ? 'VALIDATION_ERROR' : status === 404 ? 'NOT_FOUND' : `HTTP_${status}`;
     return new Problem(status, code, error.message);
   }
-  const { code, message } = (error ?? {}) as { code?: string; message?: string };
-  if (BUSY_SQLSTATES.includes(code ?? '') || POOL_TIMEOUT.test(message ?? '')) {
-    log.warn(JSON.stringify({ event: 'busy', cause: code ?? 'pool' }));
+  const cause = busyCause(error);
+  if (cause) {
+    log.warn(JSON.stringify({ event: 'busy', cause }));
     return new Problem(503, 'BUSY', 'The service is busy. Retry.');
   }
   // Anything else, a dropped connection included, is a 500: the outcome may be unknown

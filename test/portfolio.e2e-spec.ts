@@ -1,4 +1,4 @@
-import { assertInvariants, startApi, TestApi } from './harness';
+import { startApi, TestApi } from './harness';
 
 describe('GET /users/:userId/portfolio', () => {
   let api: TestApi;
@@ -69,9 +69,8 @@ describe('GET /users/:userId/portfolio', () => {
     expect(res.body).toMatchObject({ status: 404, code: 'USER_NOT_FOUND' });
   });
 
-  it.each(['abc', '0', '-1', '1.5', '99999999999'])('userId "%s" → 400', async (id) => {
+  it.each(['abc', '0', '-1', '1.5', '2147483648', '99999999999'])('userId "%s" → 400', async (id) => {
     await api.http().get(`/users/${id}/portfolio`).expect(400);
   });
 
-  afterEach(() => assertInvariants(api.db));
 });

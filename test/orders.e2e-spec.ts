@@ -1,4 +1,4 @@
-import { assertInvariants, orderCount, startApi, TestApi } from './harness';
+import { orderCount, startApi, TestApi } from './harness';
 
 // Seed ids and latest closes used below.
 const GGAL = 34; // 885.80
@@ -12,10 +12,7 @@ const ARS = 66; // MONEDA
 describe('POST /users/:userId/orders', () => {
   let api: TestApi;
   beforeEach(async () => (api = await startApi()));
-  afterEach(async () => {
-    await assertInvariants(api.db);
-    await api.close();
-  });
+  afterEach(() => api.close()); // close() also checks the invariants
 
   const send = (body: object, userId = 1) => api.http().post(`/users/${userId}/orders`).send(body);
   const available = async () => (await api.http().get('/users/1/portfolio')).body.cash.available;
@@ -114,15 +111,26 @@ describe('POST /users/:userId/orders', () => {
       expect(await events(res.body.id)).toEqual([{ status: 'NEW', reason: null }, { status: 'CANCELLED', reason: null }]);
     });
 
-    it('any status orders.status accepts can be recorded (up to 20 characters)', async () => {
-      await api.db.query(`UPDATE orders SET status = 'PARTIALLY_FILLED' WHERE id = 1`);
-      expect((await events(1)).at(-1)).toEqual({ status: 'PARTIALLY_FILLED', reason: null });
-      await api.db.query(`UPDATE orders SET status = 'FILLED' WHERE id = 1`);
-    });
-
     it('a saved order cannot be edited, only its status changes', async () => {
       const error = await api.db.query(`UPDATE orders SET price = price + 1 WHERE id = 1`).catch((e) => e);
       expect(error.message).toMatch(/only status can change/);
+    });
+
+    it('only a NEW order changes status: FILLED is final', async () => {
+      const error = await api.db.query(`UPDATE orders SET status = 'CANCELLED' WHERE id = 1`).catch((e) => e);
+      expect(error.message).toMatch(/a FILLED order is final/);
+    });
+
+    it('a NEW order can only become FILLED or CANCELLED', async () => {
+      const error = await api.db.query(`UPDATE orders SET status = 'REJECTED' WHERE id = 5`).catch((e) => e); // seed order 5 is NEW
+      expect(error.message).toMatch(/can only be FILLED or CANCELLED/);
+    });
+
+    it('the history cannot be changed or removed', async () => {
+      for (const change of ['UPDATE order_events SET status = status', 'DELETE FROM order_events']) {
+        const error = await api.db.query(change).catch((e) => e);
+        expect(error.message).toMatch(/append-only/);
+      }
     });
 
     it('an UPDATE that leaves the status as it was adds no event', async () => {
@@ -152,7 +160,6 @@ describe('POST /users/:userId/orders', () => {
       ['price as a JSON number (money travels as strings)', { ...base, type: 'LIMIT', price: 900 }],
       ['negative amount', { instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '-100' }],
       ['price above NUMERIC(10,2)', { ...base, type: 'LIMIT', price: '100000000' }],
-      ['amount computes a size above the INT column', { instrumentId: DOME, side: 'BUY', type: 'MARKET', amount: '1000000000000' }],
       ['size null', { ...base, size: null }],
       ['amount null', { instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: null }],
       ['price null on a LIMIT', { ...base, type: 'LIMIT', price: null }],
@@ -161,6 +168,13 @@ describe('POST /users/:userId/orders', () => {
       const before = await orderCount(api.db);
       const res = await send(body).expect(400);
       expect(res.body).toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(await orderCount(api.db)).toBe(before);
+    });
+
+    it('amount that computes a size above the INT column → AMOUNT_TOO_LARGE', async () => {
+      const before = await orderCount(api.db);
+      const res = await send({ instrumentId: DOME, side: 'BUY', type: 'MARKET', amount: '1000000000000' }).expect(400);
+      expect(res.body.code).toBe('AMOUNT_TOO_LARGE');
       expect(await orderCount(api.db)).toBe(before);
     });
 

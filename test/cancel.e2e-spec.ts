@@ -1,13 +1,10 @@
-import { assertInvariants, startApi, TestApi } from './harness';
+import { startApi, TestApi } from './harness';
 
 // Seed orders of user 1: 5 = NEW LIMIT BUY LOMA (holds 35,500), 2 = FILLED, 6 = REJECTED, 3 = CANCELLED.
 describe('POST /users/:userId/orders/:orderId/cancel', () => {
   let api: TestApi;
   beforeEach(async () => (api = await startApi()));
-  afterEach(async () => {
-    await assertInvariants(api.db);
-    await api.close();
-  });
+  afterEach(() => api.close()); // close() also checks the invariants
 
   const cancel = (orderId: number, userId = 1) => api.http().post(`/users/${userId}/orders/${orderId}/cancel`);
 

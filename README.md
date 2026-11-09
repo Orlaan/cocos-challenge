@@ -32,7 +32,7 @@ npm ci
 DATABASE_URL='postgres://usuario:clave@host/base?sslmode=require' npm run start:dev
 ```
 
-La app no crea ni migra nada en esa base. Sin la tabla de idempotencia (`db/local-additions.sql`), una request con `Idempotency-Key` recibe 501 en lugar de un reintento inseguro; el paso de deploy recomendado es `psql "$DATABASE_URL" -f db/local-additions.sql` (aditivo, se puede repetir, sin reiniciar la API).
+Con `sslmode=require`, `pg` también verifica el certificado (Neon tiene uno válido); los tests usan `no-verify` porque su Postgres tiene uno autofirmado. La app no crea ni migra nada en esa base. Idempotencia y auditoría necesitan `psql "$DATABASE_URL" -f db/local-additions.sql`; sin eso, `Idempotency-Key` recibe 501 (D-10).
 
 ## Verificar
 
@@ -40,7 +40,7 @@ La app no crea ni migra nada en esa base. Sin la tabla de idempotencia (`db/loca
 npm run verify   # typecheck + unit + e2e (Postgres real vía Testcontainers)
 ```
 
-Necesita Docker y Node 22.13+. Los e2e levantan un Postgres con SSL, clonan una base nueva por archivo de test y se niegan a correr contra un host que no sea local. CI corre lo mismo (`.github/workflows/ci.yml`).
+Necesita Docker y Node 22.13+; tarda ~1 min con la imagen de Postgres ya descargada. Los e2e levantan un Postgres con SSL, clonan una base nueva por test o por archivo y se niegan a correr contra un host que no sea local. CI corre lo mismo (`.github/workflows/ci.yml`).
 
 ## Endpoints
 
@@ -60,12 +60,12 @@ Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En
 | MARKET con fondos o acciones | 201 `FILLED` | sí |
 | LIMIT con fondos o acciones (reserva cash o acciones) | 201 `NEW` | sí |
 | Más que el disponible (reservas incluidas), vender BMA, o MARKET sin precio | 201 `REJECTED` + `reason` | sí |
-| Body inválido, `CASH_IN`/`CASH_OUT`, comprar ARS, monto menor a una acción o sin precio para calcularlo | 400 | no |
+| Body inválido, `CASH_IN`/`CASH_OUT`, comprar ARS, monto menor a una acción, mayor al tamaño máximo o sin precio para calcularlo | 400 | no |
 | Usuario, instrumento u orden inexistente (u orden de otro usuario) | 404 | no |
 | Cancelar una orden que no está NEW | 409 | no |
 | Misma `Idempotency-Key` con otro body | 422 | no |
 | `Idempotency-Key` en una base sin la tabla de idempotencia | 501 | no |
-| Lock ocupado más de 3 s, sentencia de más de 5 s o pool sin conexiones | 503 + `Retry-After` | no |
+| Lock ocupado más de 3 s, sentencia de más de 5 s, transacción inactiva más de 2 s o pool sin conexiones | 503 + `Retry-After` | no |
 | Error inesperado (base caída, bug) | 500 | desconocido: reintentar sólo con la misma `Idempotency-Key` |
 
 Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable. Cada fila tiene su test por HTTP; las de 500 y 503 están en `test/failures.e2e-spec.ts` y `test/concurrency.e2e-spec.ts`. Con `db/local-additions.sql` aplicado, cada REJECTED y cada cancelación quedan en `order_events` con su motivo (D-07); sin él, el motivo queda sólo en la respuesta y el log.
@@ -73,14 +73,10 @@ Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable. 
 ## Revisar en 15 minutos
 
 1. `src/orders/orders.ts` `place()`: lock → leer instrumento, precio y disponible → decidir → insertar, en una transacción.
-2. `src/db.ts`: el lock por usuario y los límites de tiempo de toda transacción.
+2. `src/ledger.ts` `lockUser`: el lock por usuario. `src/db.ts`: los límites de tiempo de toda transacción.
 3. `src/orders/decide.ts` y `src/portfolio/positions.ts`: las reglas de negocio, puras, con tests unitarios.
-4. `test/concurrency.e2e-spec.ts`: la carrera, probada; `test/harness.ts` `assertInvariants` corre después de cada test e2e: nadie gastó más cash ni vendió más acciones de las que tenía.
+4. `test/concurrency.e2e-spec.ts`: la carrera, probada; `test/harness.ts` `assertInvariants` revisa cada base de test antes de cerrarla: nadie gastó más cash ni vendió más acciones de las que tenía.
 
 ## Si esto crece
 
-El camino completo está en cada "A escala" de [DECISIONS.md](DECISIONS.md). Los tres primeros pasos:
-
-1. Límite por usuario en el API Gateway, PgBouncer en modo transacción (por eso `SET LOCAL`) e instancias horizontales; el lock sigue en la base.
-2. Índices de `optional-hardening.sql`; después una tabla `positions` actualizada en la misma transacción y reconciliada contra `orders`.
-3. Shard por usuario: el lock por usuario ya encaja.
+El camino está en cada "A escala" de [DECISIONS.md](DECISIONS.md). Lo primero que se agota es el pool (D-04): el primer paso es un límite por usuario en el API Gateway.

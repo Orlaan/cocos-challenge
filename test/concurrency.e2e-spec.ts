@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import Decimal from '../src/money';
 import { holdUserRow, startApi, TestApi, waitForLockWaiters } from './harness';
 
 const GGAL = 34; // close 885.80
@@ -11,8 +12,9 @@ describe('concurrent orders for one user', () => {
   afterEach(() => api.close()); // close() also checks the invariants
 
   const send = (body: object) => api.http().post('/users/1/orders').send(body);
+  const fire = (body: object) => send(body).then((r) => r); // supertest sends only on then(): this starts it now
 
-  // To see the race fail: delete `FOR UPDATE` in src/db.ts and run `npx jest test/concurrency`: 5 FILLED.
+  // To see the race fail: delete the `lockUser` call in src/orders/orders.ts and run `npx jest test/concurrency`: 5 FILLED.
   // (The 5 still queue, on the INSERT's foreign-key check, but only after each has read the same available.)
   it('5 parallel BUYs with cash for 4 → exactly 4 FILLED, 1 REJECTED, available never below 0', async () => {
     const holder = await holdUserRow(api.url);
@@ -25,6 +27,22 @@ describe('concurrent orders for one user', () => {
     expect(statuses).toEqual(['FILLED', 'FILLED', 'FILLED', 'FILLED', 'REJECTED']);
     const portfolio = await api.http().get('/users/1/portfolio');
     expect(portfolio.body.cash.available).toBe('28699.20'); // 627,500 − 4 × 149,700.20
+  });
+
+  it('LIMIT and MARKET mixed, in parallel: reservations count, exactly as if sent one by one', async () => {
+    const holder = await holdUserRow(api.url);
+    const limit = { instrumentId: GGAL, side: 'BUY', type: 'LIMIT', size: 169, price: '885.80' }; // holds 149,700.20
+    const pending = Promise.all([send(limit), send(buy150k), send(limit), send(buy150k), send(limit)]);
+    await waitForLockWaiters(api.db, 5);
+    await holder.query('COMMIT');
+    await holder.end();
+
+    const statuses = (await pending).map((r) => r.body.status);
+    expect(statuses.filter((s) => s === 'REJECTED')).toHaveLength(1); // cash for 4 of 5
+    const { cash } = (await api.http().get('/users/1/portfolio')).body;
+    const limitsHeld = statuses.filter((s, i) => s === 'NEW' && i % 2 === 0).length;
+    expect(cash.reserved).toBe(new Decimal('149700.20').times(limitsHeld).plus(125500).toFixed(2));
+    expect(cash.available).toBe('28699.20'); // 627,500 − 4 × 149,700.20, filled or held
   });
 
   it('5 parallel SELLs with shares for 4 → exactly 4 FILLED, 1 REJECTED', async () => {
@@ -43,7 +61,7 @@ describe('concurrent orders for one user', () => {
   it('a cancel does not wait for the user lock, and the waiting order then sees the freed cash', async () => {
     const holder = await holdUserRow(api.url);
     // 733 GGAL = 649,291.40: more than the 627,500 available, less than 627,500 + the 90,000 order 7 holds.
-    const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '650000' }).then((r) => r); // supertest starts on then()
+    const pending = fire({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '650000' });
     await waitForLockWaiters(api.db, 1);
     await api.http().post('/users/1/orders/7/cancel').expect(200); // not blocked by the held lock
     await holder.query('COMMIT');
@@ -61,8 +79,8 @@ describe('concurrent orders for one user', () => {
     });
 
     it('an order waits for the lock, then completes', async () => {
-      const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 }).then((r) => r); // then() sends it
-      await waitForLockWaiters(api.db, 1); // blocked on SELECT … FOR UPDATE
+      const pending = fire({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 });
+      await waitForLockWaiters(api.db, 1); // blocked on SELECT … FOR NO KEY UPDATE
 
       await holder.query('COMMIT');
       const res = await pending;
@@ -71,7 +89,7 @@ describe('concurrent orders for one user', () => {
     });
 
     it('a MARKET order that waited fills at the close published while it waited', async () => {
-      const pending = send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 }).then((r) => r);
+      const pending = fire({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 });
       await waitForLockWaiters(api.db, 1);
       await api.db.query(`INSERT INTO marketdata (instrumentid, date, close, previousclose) VALUES ($1, '2099-01-01', 900, 885.80)`, [GGAL]);
       await holder.query('COMMIT');

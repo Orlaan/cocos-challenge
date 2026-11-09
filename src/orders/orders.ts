@@ -2,9 +2,9 @@ import { Body, Controller, Headers, HttpCode, Injectable, Logger, Param, Post, R
 import type { Response } from 'express';
 import Decimal from '../money';
 import { DataSource } from 'typeorm';
-import { lockUser, Sql, transaction } from '../db';
+import { Sql, transaction } from '../db';
 import { IdPipe } from '../id.pipe';
-import { availableShares, cash, latestQuotes } from '../ledger';
+import { availableShares, cash, latestQuotes, lockUser } from '../ledger';
 import { Problem } from '../problem';
 import { decide, Reason, Status } from './decide';
 import * as idempotency from './idempotency';
@@ -16,7 +16,7 @@ export interface Order {
   userId: number;
   side: PlaceOrder['side'];
   type: PlaceOrder['type'];
-  size: number | null;
+  size: number;
   price: string | null;
   status: Status | 'CANCELLED';
   datetime: string;
