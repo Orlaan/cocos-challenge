@@ -1,6 +1,6 @@
 import Decimal from './money';
-import { Sql } from './db';
-import { Problem } from './problem';
+import { Sql } from './database/db';
+import { Problem } from './common/problem';
 
 // Everything a user owns is derived from the `orders` log on each read; nothing is stored twice.
 // FILLED orders move cash and shares. NEW (LIMIT) orders only hold them until they are cancelled.
@@ -49,18 +49,6 @@ export async function availableShares(sql: Sql, userId: number, instrumentId: nu
     [userId, instrumentId],
   );
   return Number(row.shares);
-}
-
-/** Shares held by NEW SELL orders, per instrument. */
-export async function heldShares(sql: Sql, userId: number): Promise<Map<number, number>> {
-  const rows = await sql<{ instrumentId: number; shares: string }>(
-    `SELECT instrumentid AS "instrumentId", SUM(size) AS shares
-     FROM orders
-     WHERE userid = $1 AND status = 'NEW' AND side = 'SELL'
-     GROUP BY instrumentid`,
-    [userId],
-  );
-  return new Map(rows.map((r) => [r.instrumentId, Number(r.shares)]));
 }
 
 export interface Trade {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { Sql } from '../db';
+import { Sql } from '../database/db';
 import Decimal from '../money';
-import { Problem } from '../problem';
+import { Problem } from '../common/problem';
 import type { PlaceOrder } from './order.dto';
 
 // Idempotency-Key support, stored in `idempotency_keys` (db/local-additions.sql).

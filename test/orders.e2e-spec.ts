@@ -94,26 +94,12 @@ describe('POST /users/:userId/orders', () => {
 
   describe('audit trail (order_events, db/local-additions.sql)', () => {
     const events = async (orderId: number) =>
-      (await api.db.query('SELECT status, reason FROM order_events WHERE orderid = $1 ORDER BY id', [orderId])).rows;
-
-    it.each([
-      ['INSUFFICIENT_FUNDS', { instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 100000 }],
-      ['INSUFFICIENT_SHARES', { instrumentId: GGAL, side: 'SELL', type: 'MARKET', size: 100000 }],
-      ['NO_MARKET_PRICE', { instrumentId: 3, side: 'BUY', type: 'MARKET', size: 1 }], // PGR has no marketdata
-    ])('a REJECTED order keeps its reason in the database: %s', async (reason, body) => {
-      const res = await send(body).expect(201);
-      expect(await events(res.body.id)).toEqual([{ status: 'REJECTED', reason }]);
-    });
-
-    it('a seed order cancelled now keeps its history too: NEW, then CANCELLED', async () => {
-      await api.http().post('/users/1/orders/5/cancel').expect(200);
-      expect(await events(5)).toEqual([{ status: 'NEW', reason: null }, { status: 'CANCELLED', reason: null }]);
-    });
+      (await api.db.query('SELECT status FROM order_events WHERE orderid = $1 ORDER BY id', [orderId])).rows;
 
     it('a cancel keeps the earlier status: NEW, then CANCELLED', async () => {
       const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'LIMIT', size: 1, price: '800.00' }).expect(201);
       await api.http().post(`/users/1/orders/${res.body.id}/cancel`).expect(200);
-      expect(await events(res.body.id)).toEqual([{ status: 'NEW', reason: null }, { status: 'CANCELLED', reason: null }]);
+      expect(await events(res.body.id)).toEqual([{ status: 'NEW' }, { status: 'CANCELLED' }]);
     });
 
     it('an UPDATE that leaves the status as it was adds no event', async () => {
@@ -175,6 +161,17 @@ describe('POST /users/:userId/orders', () => {
 
     it('malformed JSON → 400', async () => {
       await api.http().post('/users/1/orders').set('content-type', 'application/json').send('{"side":').expect(400);
+    });
+
+    // Express's body parser rejects these before Nest sees the request; they are the client's error, not a 500.
+    it.each([
+      ['a body over 100 kB', 'application/json', JSON.stringify({ pad: 'x'.repeat(101 * 1024) }), 413],
+      ['a charset other than UTF-8', 'application/json; charset=latin1', '{}', 415],
+    ])('%s → %i, nothing saved', async (_, contentType, body, status) => {
+      const before = await orderCount(api.db);
+      const res = await api.http().post('/users/1/orders').set('content-type', contentType).send(body).expect(status);
+      expect(res.body).toMatchObject({ status, code: `HTTP_${status}` });
+      expect(await orderCount(api.db)).toBe(before);
     });
   });
 

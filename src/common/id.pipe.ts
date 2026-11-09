@@ -1,5 +1,5 @@
 import { Injectable, PipeTransform } from '@nestjs/common';
-import { INT_MAX } from './limits';
+import { INT_MAX } from '../limits';
 import { Problem } from './problem';
 
 /** Path ids must be positive integers that fit a Postgres INT; anything else is a 400, not a 500. */

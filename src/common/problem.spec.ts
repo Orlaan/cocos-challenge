@@ -15,6 +15,15 @@ describe('toProblem', () => {
     expect(toProblem(Object.assign(new AggregateError([]), { code: 'ENOTFOUND' }))).toMatchObject({ status: 500 });
   });
 
+  it("a body-parser client error keeps its status: the client's mistake, not a 500", () => {
+    const tooLarge = Object.assign(new Error('request entity too large'), { status: 413, expose: true });
+    expect(toProblem(tooLarge)).toMatchObject({ status: 413, code: 'HTTP_413' });
+  });
+
+  it('a 4xx-looking error that is not marked safe to show → 500', () => {
+    expect(toProblem(Object.assign(new Error('internal'), { status: 404 }))).toMatchObject({ status: 500 });
+  });
+
   it('a connection lost for any other reason → 500: the outcome is unknown', () => {
     expect(toProblem(Object.assign(new Error('Connection terminated unexpectedly'), { code: undefined }))).toMatchObject({ status: 500 });
   });

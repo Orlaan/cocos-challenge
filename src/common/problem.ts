@@ -1,6 +1,4 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, Logger } from '@nestjs/common';
-import type { Response } from 'express';
-import { STATUS_CODES } from 'node:http';
+import { HttpException, Logger } from '@nestjs/common';
 import { QueryRunnerAlreadyReleasedError } from 'typeorm';
 
 /** An error the API returns on purpose, with a stable `code` the client can switch on. */
@@ -28,26 +26,12 @@ function busyCause(error: unknown): string | undefined {
   if (BUSY_SQLSTATES.includes(code ?? '')) return code;
   if (POOL_TIMEOUT.test(message ?? '')) return 'pool';
   if (code === CONNECT_REFUSED) return code;
-  // Postgres ended a transaction left idle over 2 s (src/db.ts); its next query finds the connection gone.
+  // Postgres ended a transaction left idle over 2 s (src/database/db.ts); its next query finds the connection gone.
   // Our queries run only inside the transaction, before COMMIT, so nothing was saved.
   if (error instanceof QueryRunnerAlreadyReleasedError) return 'idle';
 }
 
 const log = new Logger('ProblemFilter');
-
-/** Renders every error as RFC 9457 problem details. */
-@Catch()
-export class ProblemFilter implements ExceptionFilter {
-  catch(error: unknown, host: ArgumentsHost) {
-    const res = host.switchToHttp().getResponse<Response>();
-    const p = toProblem(error);
-    if (p.status === 503) res.setHeader('Retry-After', '1');
-    res
-      .status(p.status)
-      .type('application/problem+json')
-      .json({ type: 'about:blank', title: STATUS_CODES[p.status], status: p.status, code: p.code, detail: p.detail });
-  }
-}
 
 /** Maps any error to the Problem the client sees. Internal details never leave the server. */
 export function toProblem(error: unknown): Problem {
@@ -56,6 +40,12 @@ export function toProblem(error: unknown): Problem {
     const status = error.getStatus();
     const code = status === 400 ? 'VALIDATION_ERROR' : status === 404 ? 'NOT_FOUND' : `HTTP_${status}`;
     return new Problem(status, code, error.message);
+  }
+  // Express's body parser (body over 100 kB, charset not UTF-8) throws a 4xx `http-errors` error that Nest passes
+  // through unwrapped. `expose` means its message is safe to show.
+  const { status, expose, message } = (error ?? {}) as { status?: unknown; expose?: unknown; message?: string };
+  if (expose === true && typeof status === 'number' && status >= 400 && status < 500) {
+    return new Problem(status, `HTTP_${status}`, message);
   }
   const cause = busyCause(error);
   if (cause) {

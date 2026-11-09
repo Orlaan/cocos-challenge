@@ -20,8 +20,6 @@ describe('POST /users/:userId/orders/:orderId/cancel', () => {
     const sell = await api.http().post('/users/1/orders').send({ instrumentId: PAMP, side: 'SELL', type: 'LIMIT', size: 40, price: '2000.00' });
     expect(sell.body.status).toBe('NEW');
     await cancel(sell.body.id).expect(200);
-    const pamp = (await api.http().get('/users/1/portfolio')).body.positions.find((p: any) => p.ticker === 'PAMP');
-    expect(pamp).toMatchObject({ quantity: 40, reservedQuantity: 0, availableQuantity: 40 });
     const market = await api.http().post('/users/1/orders').send({ instrumentId: PAMP, side: 'SELL', type: 'MARKET', size: 40 });
     expect(market.body.status).toBe('FILLED');
   });

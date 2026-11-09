@@ -1,7 +1,6 @@
-import { Controller, Get, Injectable, Query } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { transaction } from '../db';
-import { Problem } from '../problem';
+import { transaction } from '../database/db';
 
 @Injectable()
 export class InstrumentsService {
@@ -19,19 +18,5 @@ export class InstrumentsService {
        LIMIT 20`,
       [pattern, q],
     ));
-  }
-}
-
-@Controller('instruments')
-export class InstrumentsController {
-  constructor(private readonly instruments: InstrumentsService) {}
-
-  @Get()
-  search(@Query('q') q?: string) {
-    const term = typeof q === 'string' ? q.trim() : '';
-    if (term.length < 1 || term.length > 50) {
-      throw new Problem(400, 'VALIDATION_ERROR', 'q must have 1 to 50 characters');
-    }
-    return this.instruments.search(term);
   }
 }

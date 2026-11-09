@@ -1,4 +1,4 @@
-# docker compose up → Postgres seeded with db/database.sql (+ db/local-additions.sql: idempotency keys, audit log, index) and the API on :3000.
+# docker compose up → Postgres seeded with db/database.sql (+ db/local-additions.sql: idempotency keys, audit log) and the API on :3000.
 services:
   db:
     image: postgres:18

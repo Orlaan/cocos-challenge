@@ -1,15 +1,13 @@
-import { Body, Controller, Headers, HttpCode, Injectable, Logger, Param, Post, Res } from '@nestjs/common';
-import type { Response } from 'express';
-import Decimal from '../money';
+import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { Sql, transaction } from '../db';
-import { IdPipe } from '../id.pipe';
+import { Problem } from '../common/problem';
+import { Sql, transaction } from '../database/db';
 import { availableShares, cash, lockUser } from '../ledger';
 import { latestQuotes } from '../marketdata';
-import { Problem } from '../problem';
+import Decimal from '../money';
 import { decide, OrderStatus, Reason } from './decide';
 import * as idempotency from './idempotency';
-import { keyError, PlaceOrder, shapeError } from './order.dto';
+import { PlaceOrder } from './order.dto';
 
 export interface Order {
   id: number;
@@ -36,16 +34,13 @@ export class OrdersService {
 
   /** Lock the user, read the price and what they have, decide, record: one transaction. */
   async place(userId: number, order: PlaceOrder, key?: string): Promise<{ order: Order; replayed: boolean }> {
-    const started = Date.now();
-
     const result = await transaction(this.ds, async (sql) => {
-      // Read before the lock, so its round trip is not spent holding it; checked after the replay.
-      const [instrument] = await sql<{ type: string }>('SELECT type FROM instruments WHERE id = $1', [order.instrumentId]);
       await lockUser(sql, userId);
       // A retry gets its first answer, even if the instrument has changed since.
-      const replayed = key ? await idempotency.replay<Order>(sql, userId, key, order) : null;
-      if (replayed) return { order: replayed, replayed: true };
+      const stored = key ? await idempotency.replay<Order>(sql, userId, key, order) : null;
+      if (stored) return { order: stored, replayed: true };
 
+      const [instrument] = await sql<{ type: string }>('SELECT type FROM instruments WHERE id = $1', [order.instrumentId]);
       if (!instrument) throw new Problem(404, 'INSTRUMENT_NOT_FOUND');
       if (instrument.type === 'MONEDA') throw new Problem(400, 'INSTRUMENT_NOT_TRADABLE', 'ARS is cash, not a tradable asset');
       // The price is read after the lock wait, so a MARKET order fills at the latest close.
@@ -54,8 +49,6 @@ export class OrdersService {
       const decision = decide(order, { close, available: await this.available(sql, userId, order) });
       if ('invalid' in decision) throw new Problem(400, decision.invalid);
 
-      // The audit trigger (db/local-additions.sql) copies this transaction-local setting into the order's order_events row.
-      if (decision.reason) await sql(`SELECT set_config('app.order_reason', $1, true)`, [decision.reason]);
       // clock_timestamp(), not now(): the time the order executes, after any lock wait, so it matches the price it used.
       const [saved] = await sql<Order>(
         `INSERT INTO orders (instrumentid, userid, side, type, size, price, status, datetime)
@@ -69,7 +62,7 @@ export class OrdersService {
     });
 
     const { id, status, reason } = result.order;
-    this.log.log(JSON.stringify({ event: 'order', userId, orderId: id, status, reason, replayed: result.replayed, ms: Date.now() - started }));
+    this.log.log(JSON.stringify({ event: 'order', userId, orderId: id, status, reason, replayed: result.replayed }));
     return result;
   }
 
@@ -80,11 +73,7 @@ export class OrdersService {
       : new Decimal(await availableShares(sql, userId, order.instrumentId));
   }
 
-  /**
-   * Only a NEW order can be cancelled; the conditional UPDATE makes that check and the change one atomic step.
-   * It needs no user lock: cancelling only frees cash or shares, so an order deciding at the same moment
-   * can at worst see less available than there is (it may reject), never more (it cannot overspend).
-   */
+  /** One conditional UPDATE: only a NEW order is cancelled. No user lock: cancelling only frees (D-09). */
   async cancel(userId: number, orderId: number): Promise<Order> {
     const cancelled = await transaction(this.ds, async (sql) => {
       const [cancelled] = await sql<Order>(
@@ -103,31 +92,5 @@ export class OrdersService {
     });
     this.log.log(JSON.stringify({ event: 'cancel', userId, orderId })); // after the commit
     return cancelled;
-  }
-}
-
-@Controller('users/:userId/orders')
-export class OrdersController {
-  constructor(private readonly orders: OrdersService) {}
-
-  /** 201 for every recorded order, REJECTED included: the rejection is a saved fact, not a failed request. */
-  @Post()
-  async place(
-    @Param('userId', IdPipe) userId: number,
-    @Body() body: PlaceOrder,
-    @Headers('idempotency-key') key: string | undefined,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<Order> {
-    const problem = shapeError(body) ?? keyError(key);
-    if (problem) throw new Problem(400, 'VALIDATION_ERROR', problem);
-    const { order, replayed } = await this.orders.place(userId, body, key);
-    if (replayed) res.setHeader('Idempotent-Replayed', 'true');
-    return order;
-  }
-
-  @Post(':orderId/cancel')
-  @HttpCode(200)
-  cancel(@Param('userId', IdPipe) userId: number, @Param('orderId', IdPipe) orderId: number): Promise<Order> {
-    return this.orders.cancel(userId, orderId);
   }
 }

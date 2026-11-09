@@ -1,4 +1,4 @@
-import { Sql } from './db';
+import { Sql } from './database/db';
 
 export interface Quote {
   close: string;

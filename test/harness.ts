@@ -6,10 +6,10 @@ import { Client } from 'pg';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
-import { createDataSource } from '../src/db';
+import { createDataSource } from '../src/database/db';
 
 /** Tests may only ever touch a local throwaway database. */
-export function assertLocalDb(url: string) {
+function assertLocalDb(url: string) {
   const host = new URL(url).hostname;
   if (!['localhost', '127.0.0.1', '::1'].includes(host)) {
     throw new Error(`Refusing to run tests against non-local database host "${host}"`);
@@ -63,7 +63,8 @@ export async function appOn(url: string): Promise<INestApplication> {
     .overrideProvider(DataSource)
     .useFactory({ factory: () => createDataSource(url) })
     .compile();
-  const app = moduleRef.createNestApplication({ logger: false });
+  // Quiet by default; TEST_LOG=1 shows the app's logs (the error behind a 500, for one).
+  const app = moduleRef.createNestApplication({ logger: process.env.TEST_LOG ? undefined : false });
   await app.init();
   return app;
 }

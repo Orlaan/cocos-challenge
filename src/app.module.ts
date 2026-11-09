@@ -1,11 +1,11 @@
-import { Inject, Module, OnApplicationShutdown, ValidationPipe } from '@nestjs/common';
+import { Module, ValidationPipe } from '@nestjs/common';
 import { APP_FILTER, APP_PIPE } from '@nestjs/core';
-import { DataSource } from 'typeorm';
-import { createDataSource } from './db';
-import { InstrumentsController, InstrumentsService } from './instruments/instruments';
-import { OrdersController, OrdersService } from './orders/orders';
-import { PortfolioController, PortfolioService } from './portfolio/portfolio';
-import { Problem, ProblemFilter } from './problem';
+import { Problem } from './common/problem';
+import { ProblemFilter } from './common/problem.filter';
+import { DatabaseModule } from './database/database.module';
+import { InstrumentsModule } from './instruments/instruments.module';
+import { OrdersModule } from './orders/orders.module';
+import { PortfolioModule } from './portfolio/portfolio.module';
 
 const validation = new ValidationPipe({
   whitelist: true,
@@ -14,21 +14,12 @@ const validation = new ValidationPipe({
     new Problem(400, 'VALIDATION_ERROR', errors.flatMap((e) => Object.values(e.constraints ?? {})).join('; ')),
 });
 
+// APP_PIPE and APP_FILTER as providers, not useGlobalPipes in main.ts, so the e2e tests run the same pipeline.
 @Module({
-  controllers: [PortfolioController, InstrumentsController, OrdersController],
+  imports: [DatabaseModule, PortfolioModule, InstrumentsModule, OrdersModule],
   providers: [
-    { provide: DataSource, useFactory: () => createDataSource(process.env.DATABASE_URL!) },
     { provide: APP_PIPE, useValue: validation },
     { provide: APP_FILTER, useClass: ProblemFilter },
-    PortfolioService,
-    InstrumentsService,
-    OrdersService,
   ],
 })
-export class AppModule implements OnApplicationShutdown {
-  constructor(@Inject(DataSource) private readonly ds: DataSource) {}
-
-  onApplicationShutdown() {
-    return this.ds.destroy();
-  }
-}
+export class AppModule {}

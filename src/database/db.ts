@@ -24,24 +24,19 @@ function sqlFor(manager: EntityManager): Sql {
 /**
  * Every transaction is bounded: a lock wait over 3 s or a statement over 5 s fails (→ 503), never hangs.
  * A transaction left idle over 2 s (Node stalled between two queries) is ended by Postgres, so it cannot keep
- * a user's lock. 2 s is far above any pause between two queries of one order, and below the 3 s lock wait:
- * an order queued behind a stalled one still runs instead of getting 503. All are transaction-local (SET LOCAL), so they are safe behind a transaction-mode pooler.
+ * a user's lock; 2 s is below the 3 s lock wait, so the order queued behind it still runs.
+ * All three are transaction-local, so they work behind a transaction-mode pooler.
+ * No query runs after COMMIT: src/common/problem.ts maps a released connection to 503 ("nothing saved") on that rule.
  */
-function bounded<T>(ds: DataSource, isolation: 'READ COMMITTED' | 'REPEATABLE READ', work: (sql: Sql) => Promise<T>) {
+export function transaction<T>(
+  ds: DataSource,
+  work: (sql: Sql) => Promise<T>,
+  isolation: 'READ COMMITTED' | 'REPEATABLE READ' = 'READ COMMITTED',
+): Promise<T> {
   return ds.transaction(isolation, async (manager) => {
     const sql = sqlFor(manager);
     await sql(`SELECT set_config('lock_timeout', '3s', true), set_config('statement_timeout', '5s', true),
       set_config('idle_in_transaction_session_timeout', '2s', true)`);
     return work(sql);
   });
-}
-
-/** One transaction (READ COMMITTED). */
-export function transaction<T>(ds: DataSource, work: (sql: Sql) => Promise<T>): Promise<T> {
-  return bounded(ds, 'READ COMMITTED', work);
-}
-
-/** One consistent snapshot for reads that combine several queries. */
-export function snapshot<T>(ds: DataSource, work: (sql: Sql) => Promise<T>): Promise<T> {
-  return bounded(ds, 'REPEATABLE READ', work);
 }

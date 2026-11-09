@@ -1,26 +1,24 @@
-import { Controller, Get, Injectable, Param } from '@nestjs/common';
-import Decimal from '../money';
+import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { snapshot } from '../db';
-import { cash, filledTrades, heldShares } from '../ledger';
+import { Problem } from '../common/problem';
+import { transaction } from '../database/db';
+import { cash, filledTrades } from '../ledger';
 import { latestQuotes } from '../marketdata';
-import { IdPipe } from '../id.pipe';
-import { Problem } from '../problem';
 import { foldPositions } from './positions';
 
 @Injectable()
 export class PortfolioService {
   constructor(private readonly ds: DataSource) {}
 
-  /** Cash and positions come from one snapshot, so an order committing mid-read cannot skew the total. */
+  /** Cash and positions come from one snapshot (REPEATABLE READ), so an order committing mid-read cannot skew the total. */
   get(userId: number) {
-    return snapshot(this.ds, async (sql) => {
+    return transaction(this.ds, async (sql) => {
       const [user] = await sql('SELECT id FROM users WHERE id = $1', [userId]);
       if (!user) throw new Problem(404, 'USER_NOT_FOUND');
       const money = await cash(sql, userId);
       const trades = await filledTrades(sql, userId);
       const quotes = await latestQuotes(sql, [...new Set(trades.map((t) => t.instrumentId))]);
-      const positions = foldPositions(trades, quotes, await heldShares(sql, userId));
+      const positions = foldPositions(trades, quotes);
       // The total adds the positions that have a price and lists the ones that do not,
       // so a partial total never looks complete.
       const total = positions.reduce((sum, p) => sum.plus(p.marketValue ?? 0), money.balance);
@@ -35,16 +33,6 @@ export class PortfolioService {
         },
         positions,
       };
-    });
-  }
-}
-
-@Controller('users/:userId/portfolio')
-export class PortfolioController {
-  constructor(private readonly portfolio: PortfolioService) {}
-
-  @Get()
-  get(@Param('userId', IdPipe) userId: number) {
-    return this.portfolio.get(userId);
+    }, 'REPEATABLE READ');
   }
 }

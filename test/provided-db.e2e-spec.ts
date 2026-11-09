@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
-import { assertLocalDb, orderCount, startApi, TestApi } from './harness';
+import { orderCount, startApi, TestApi } from './harness';
 
 // The database Cocos provides has only the 4 original tables, and hosted Postgres (Neon) needs SSL.
 // This suite runs the app on exactly that shape: database.sql only, over an SSL connection.
@@ -56,10 +56,5 @@ describe('running on the provided database (original schema, SSL)', () => {
     const before = await events();
     await api.db.query(readFileSync('db/local-additions.sql', 'utf8'));
     expect(await events()).toBe(before);
-  });
-
-  it('the test harness refuses any non-local database', () => {
-    expect(() => assertLocalDb('postgres://u:p@example.com:5432/db')).toThrow(/non-local/);
-    expect(() => assertLocalDb('postgres://u:p@localhost:5432/db')).not.toThrow();
   });
 });

@@ -18,14 +18,12 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
 );
 -- Keys are kept: one row per keyed order (D-13).
 
--- Audit trail: every status an order takes, with the reason of a rejection. A trigger writes it, so a
--- change made outside the API (ops running SQL) is recorded too. The API passes the reason in the
--- transaction-local setting app.order_reason. Without this, the reason is only in the response and the log.
+-- Audit trail: every status an order takes. A trigger writes it, so a change made outside the API
+-- (ops running SQL) is recorded too.
 CREATE TABLE IF NOT EXISTS order_events (
   id      SERIAL      PRIMARY KEY,
   orderid INT         NOT NULL REFERENCES orders (id),
   status  VARCHAR(20) NOT NULL, -- as wide as orders.status
-  reason  VARCHAR(30),
   at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
@@ -38,19 +36,12 @@ ORDER BY id;
 CREATE OR REPLACE FUNCTION record_order_event() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'UPDATE' AND NEW.status IS NOT DISTINCT FROM OLD.status THEN RETURN NULL; END IF; -- no change, no event
-  INSERT INTO order_events (orderid, status, reason)
-  VALUES (NEW.id, NEW.status, NULLIF(current_setting('app.order_reason', true), ''));
+  INSERT INTO order_events (orderid, status) VALUES (NEW.id, NEW.status);
   RETURN NULL;
 END $$;
 
 DROP TRIGGER IF EXISTS order_events ON orders;
 CREATE TRIGGER order_events AFTER INSERT OR UPDATE ON orders
   FOR EACH ROW EXECUTE FUNCTION record_order_event();
-
-CREATE INDEX IF NOT EXISTS order_events_orderid ON order_events (orderid, id); -- an order's history, in order
-
--- Every money read filters a user's orders, under the user lock: keep that scan short.
--- (userid first serves cash(); status second serves the NEW/FILLED filters.)
-CREATE INDEX IF NOT EXISTS orders_user_status ON orders (userid, status);
 
 COMMIT;

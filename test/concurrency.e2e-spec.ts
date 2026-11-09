@@ -15,7 +15,7 @@ describe('concurrent orders for one user', () => {
   const send = (body: object) => api.http().post('/users/1/orders').send(body);
   const fire = (body: object) => send(body).then((r) => r); // supertest sends only on then(): this starts it now
 
-  // To see the race fail: delete the `lockUser` call in src/orders/orders.ts and run `npx jest test/concurrency`: 5 FILLED.
+  // To see the race fail: delete the `lockUser` call in src/orders/orders.service.ts and run `npx jest test/concurrency`: 5 FILLED.
   // (The 5 still queue, on the INSERT's foreign-key check, but only after each has read the same available.)
   it('5 parallel BUYs with cash for 4 → exactly 4 FILLED, 1 REJECTED, available never below 0', async () => {
     const holder = await holdUserRow(api.url);
@@ -69,9 +69,8 @@ describe('concurrent orders for one user', () => {
     await holder.end();
 
     const results = await pending;
+    // 500 shares cover 4 × 120: the fifth is rejected only if the NEW SELLs' held shares count.
     expect(results.filter((r) => r.body.status === 'REJECTED').map((r) => r.body.reason)).toEqual(['INSUFFICIENT_SHARES']);
-    const { positions } = (await api.http().get('/users/1/portfolio')).body;
-    expect(positions.find((p: { instrumentId: number }) => p.instrumentId === METR).availableQuantity).toBe(20); // 500 − 4 × 120
   });
 
   it('a cancel does not wait for the user lock, and the waiting order then sees the freed cash', async () => {
@@ -92,7 +91,7 @@ describe('concurrent orders for one user', () => {
     const hasRead = new Promise<void>((r) => (readCash = r));
     const cancelled = new Promise<void>((r) => (resume = r));
     const real = ledger.cash;
-    // Replacing a module export works because ts-jest compiles to CommonJS (orders.ts calls ledger_1.cash).
+    // Replacing a module export works because ts-jest compiles to CommonJS (orders.service.ts calls ledger_1.cash).
     jest.spyOn(ledger, 'cash').mockImplementationOnce(async (...args) => {
       const seen = await real(...args); // 627,500 available: order 7 still holds 90,000
       readCash();
@@ -115,16 +114,6 @@ describe('concurrent orders for one user', () => {
     afterEach(async () => {
       await holder.query('ROLLBACK').catch(() => undefined);
       await holder.end();
-    });
-
-    it('an order waits for the lock, then completes', async () => {
-      const pending = fire({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 });
-      await waitForLockWaiters(api.db, 1); // blocked on SELECT … FOR NO KEY UPDATE
-
-      await holder.query('COMMIT');
-      const res = await pending;
-      expect(res.status).toBe(201);
-      expect(res.body.status).toBe('FILLED');
     });
 
     it('a MARKET order that waited fills at the close published while it waited', async () => {

@@ -1,6 +1,10 @@
 import { IsIn, IsInt, IsPositive, Matches, Max, ValidateIf } from 'class-validator';
-import { AMOUNT, INT_MAX, PRICE } from '../limits';
+import { INT_MAX } from '../limits';
 import Decimal from '../money';
+
+// Money travels as decimal strings (like the responses), so no amount is ever a binary float.
+const PRICE = /^\d{1,8}(\.\d{1,2})?$/; // orders.price is NUMERIC(10, 2)
+const AMOUNT = /^\d{1,15}(\.\d{1,2})?$/; // bounds the input; a size above INT is AMOUNT_TOO_LARGE anyway
 
 // Like @IsOptional, but only a missing field is optional: `null` is validated, so it is a 400, not a 500.
 const Optional = () => ValidateIf((_, value) => value !== undefined);
@@ -29,10 +33,7 @@ export class PlaceOrder {
   price?: string;
 }
 
-/**
- * Rules across fields, checked after the decorators above: together, every 400 that needs no data.
- * Returns the error message, or null when the shape is valid.
- */
+/** Rules across fields, checked after the decorators above: together, every 400 that needs no data. */
 export function shapeError(o: PlaceOrder): string | null {
   if ((o.size === undefined) === (o.amount === undefined)) return 'Send exactly one of size or amount';
   if (o.type === 'LIMIT' && o.price === undefined) return 'LIMIT orders need a price';
