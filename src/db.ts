@@ -6,7 +6,7 @@ export type Sql = <T = any>(text: string, params?: unknown[]) => Promise<T[]>;
 export const POOL_SIZE = 10;
 
 export function createDataSource(url: string): Promise<DataSource> {
-  // SSL comes from the URL (`?sslmode=require` for Neon). The schema is never synchronised or migrated.
+  // SSL comes from the URL (`?sslmode=verify-full` for Neon). The schema is never synchronised or migrated.
   // A request that cannot get a pooled connection in 3 s fails fast (503) instead of queueing forever.
   return new DataSource({
     type: 'postgres',

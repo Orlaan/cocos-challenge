@@ -1,5 +1,5 @@
 // Unit tests: pure functions next to the code. E2E tests: the HTTP API on a real Postgres (Testcontainers).
-const ts = { '^.+\.ts$': ['ts-jest', { tsconfig: 'tsconfig.json' }] };
+const ts = { '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.json' }] };
 
 module.exports = {
   projects: [

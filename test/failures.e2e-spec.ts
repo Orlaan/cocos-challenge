@@ -1,6 +1,6 @@
 import { Client } from 'pg';
 import { POOL_SIZE } from '../src/db';
-import * as ledger from '../src/ledger';
+import * as marketdata from '../src/marketdata';
 import { orderCount, startApi, TestApi } from './harness';
 
 // Every failure the README lists has one outcome. Each test below would fail if its mapping broke,
@@ -39,8 +39,9 @@ describe('failure outcomes', () => {
     const before = await orderCount(api.db);
     let stalledAtQuote!: () => void;
     const holdsLock = new Promise<void>((resolve) => (stalledAtQuote = resolve));
-    const real = ledger.latestQuotes;
-    jest.spyOn(ledger, 'latestQuotes').mockImplementationOnce(async (...args) => {
+    const real = marketdata.latestQuotes;
+    // Replacing a module export works because ts-jest compiles to CommonJS (orders.ts calls marketdata_1.latestQuotes).
+    jest.spyOn(marketdata, 'latestQuotes').mockImplementationOnce(async (...args) => {
       stalledAtQuote();
       await new Promise((resolve) => setTimeout(resolve, 4000)); // idle in transaction, holding the user lock
       return real(...args);

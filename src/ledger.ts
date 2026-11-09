@@ -4,6 +4,7 @@ import { Problem } from './problem';
 
 // Everything a user owns is derived from the `orders` log on each read; nothing is stored twice.
 // FILLED orders move cash and shares. NEW (LIMIT) orders only hold them until they are cancelled.
+// Share counts are JS numbers: sums of INT sizes, exact up to 2^53. Cash is a Decimal.
 
 /**
  * Serialises all money decisions of one user: every order for that user waits here, until its transaction ends,
@@ -24,9 +25,9 @@ export interface Cash {
 
 export async function cash(sql: Sql, userId: number): Promise<Cash> {
   const [row] = await sql<{ balance: string; reserved: string }>(
-    `SELECT
-       COALESCE(SUM(CASE WHEN status = 'FILLED' THEN
-         CASE WHEN side IN ('CASH_IN', 'SELL') THEN size * price ELSE -size * price END END), 0) AS balance,
+    `SELECT -- a transfer moves size pesos, as the brief says; a trade moves size × price
+       COALESCE(SUM(CASE WHEN status = 'FILLED' THEN CASE side
+         WHEN 'CASH_IN' THEN size WHEN 'CASH_OUT' THEN -size WHEN 'SELL' THEN size * price WHEN 'BUY' THEN -size * price END END), 0) AS balance,
        COALESCE(SUM(CASE WHEN status = 'NEW' AND side = 'BUY' THEN size * price END), 0) AS reserved
      FROM orders
      WHERE userid = $1`,
@@ -47,7 +48,7 @@ export async function availableShares(sql: Sql, userId: number, instrumentId: nu
      WHERE userid = $1 AND instrumentid = $2`,
     [userId, instrumentId],
   );
-  return Number(row.shares); // a SUM of INT is BIGINT (a string in pg): sums can pass the INT range
+  return Number(row.shares);
 }
 
 /** Shares held by NEW SELL orders, per instrument. */
@@ -80,27 +81,4 @@ export function filledTrades(sql: Sql, userId: number): Promise<Trade[]> {
      ORDER BY o.id`, // under the user lock, insert order is execution order
     [userId],
   );
-}
-
-export interface Quote {
-  close: string;
-  previousClose: string | null;
-}
-
-/**
- * The latest close per instrument. An instrument with no market data, or whose latest close is not positive,
- * is missing from the map: it has no usable price (never an older one).
- */
-export async function latestQuotes(sql: Sql, instrumentIds: number[]): Promise<Map<number, Quote>> {
-  const rows = await sql<Quote & { instrumentId: number }>(
-    `SELECT * FROM (
-       SELECT DISTINCT ON (instrumentid) instrumentid AS "instrumentId", close, previousclose AS "previousClose"
-       FROM marketdata
-       WHERE instrumentid = ANY($1)
-       ORDER BY instrumentid, date DESC NULLS LAST, id DESC
-     ) latest
-     WHERE close > 0`,
-    [instrumentIds],
-  );
-  return new Map(rows.map((r) => [r.instrumentId, r]));
 }

@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
+import net from 'node:net';
 import { Client } from 'pg';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
@@ -39,13 +40,7 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
   await admin.end();
 
   const url = urlFor(name, urlQuery);
-  assertLocalDb(url);
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(DataSource)
-    .useFactory({ factory: () => createDataSource(url) })
-    .compile();
-  const app: INestApplication = moduleRef.createNestApplication({ logger: false });
-  await app.init();
+  const app = await appOn(url);
   const db = new Client({ connectionString: urlFor(name) });
   await db.connect();
   return {
@@ -59,6 +54,47 @@ export async function startApi(template: 'local' | 'provided' = 'local', urlQuer
       await app.close();
     },
   };
+}
+
+/** The real app, on the database at `url`. */
+export async function appOn(url: string): Promise<INestApplication> {
+  assertLocalDb(url);
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(DataSource)
+    .useFactory({ factory: () => createDataSource(url) })
+    .compile();
+  const app = moduleRef.createNestApplication({ logger: false });
+  await app.init();
+  return app;
+}
+
+/**
+ * A TCP proxy to the database at `url` that cuts the app's connection when the database answers its first
+ * COMMIT: the order is committed, and the app never learns it.
+ */
+export async function dropAfterCommit(url: string): Promise<{ url: string; close: () => void }> {
+  const target = new URL(url);
+  let state: 'open' | 'committing' | 'dropped' = 'open';
+  const server = net.createServer((app) => {
+    const db = net.connect(Number(target.port), target.hostname);
+    app.on('data', (d) => {
+      if (state === 'open' && d.includes('COMMIT\0')) state = 'committing'; // the statement, not READ COMMITTED
+      db.write(d);
+    });
+    db.on('data', (d) => {
+      if (state !== 'committing') return app.write(d);
+      state = 'dropped'; // the database answered the COMMIT: the app never sees the answer
+      app.destroy();
+    });
+    app.on('close', () => db.end());
+    app.on('error', () => db.end());
+    db.on('error', () => app.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const via = new URL(url);
+  via.hostname = '127.0.0.1';
+  via.port = String((server.address() as net.AddressInfo).port);
+  return { url: via.toString(), close: () => server.close() };
 }
 
 export async function orderCount(db: Client): Promise<number> {
@@ -99,8 +135,10 @@ export async function assertInvariants(db: Client) {
   const { rows } = await db.query(`
     WITH holds AS ( -- what an order moves or holds while it has this status
       SELECT h.id, h.orderid, o.userid, o.instrumentid,
-        CASE WHEN h.status = 'FILLED' AND o.side IN ('CASH_IN', 'SELL') THEN o.size * o.price
-             WHEN h.status = 'FILLED' AND o.side IN ('CASH_OUT', 'BUY') THEN -o.size * o.price
+        CASE WHEN h.status = 'FILLED' AND o.side = 'CASH_IN' THEN o.size
+             WHEN h.status = 'FILLED' AND o.side = 'CASH_OUT' THEN -o.size
+             WHEN h.status = 'FILLED' AND o.side = 'SELL' THEN o.size * o.price
+             WHEN h.status = 'FILLED' AND o.side = 'BUY' THEN -o.size * o.price
              WHEN h.status = 'NEW' AND o.side = 'BUY' THEN -o.size * o.price ELSE 0 END AS cash,
         CASE WHEN h.status = 'FILLED' AND o.side = 'BUY' THEN o.size
              WHEN h.status IN ('FILLED', 'NEW') AND o.side = 'SELL' THEN -o.size ELSE 0 END AS shares

@@ -29,10 +29,13 @@ Contra otra base (por ejemplo la provista, con SSL):
 
 ```bash
 npm ci
-DATABASE_URL='postgres://usuario:clave@host/base?sslmode=require' npm run start:dev
+DATABASE_URL='postgres://usuario:clave@host/base?sslmode=verify-full' npm run start:dev
 ```
 
-Con `sslmode=require`, `pg` también verifica el certificado (Neon tiene uno válido); los tests usan `no-verify` porque su Postgres tiene uno autofirmado. La app no crea ni migra nada en esa base. Idempotencia y auditoría necesitan `psql "$DATABASE_URL" -f db/local-additions.sql`; sin eso, `Idempotency-Key` recibe 501 (D-10).
+- `verify-full` verifica el certificado de Neon. Los tests usan `no-verify` porque su Postgres tiene uno autofirmado.
+- No lo corrí contra Neon: la prueba de SSL es local.
+- La app no crea ni migra nada en esa base.
+- Idempotencia y auditoría necesitan `psql "$DATABASE_URL" -f db/local-additions.sql`; sin eso, `Idempotency-Key` recibe 501 (D-10). En producción el script va aplicado.
 
 ## Verificar
 
@@ -65,14 +68,19 @@ Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`. En
 | Cancelar una orden que no está NEW | 409 | no |
 | Misma `Idempotency-Key` con otro body | 422 | no |
 | `Idempotency-Key` en una base sin la tabla de idempotencia | 501 | no |
-| Lock ocupado más de 3 s, sentencia de más de 5 s, transacción inactiva más de 2 s o pool sin conexiones | 503 + `Retry-After` | no |
-| Error inesperado (base caída, bug) | 500 | desconocido: reintentar sólo con la misma `Idempotency-Key` |
+| Lock ocupado más de 3 s, sentencia de más de 5 s, transacción inactiva más de 2 s, pool sin conexiones o base que rechaza la conexión | 503 + `Retry-After` | no |
+| Error inesperado (conexión perdida a mitad de una transacción, bug) | 500 | desconocido: reintentar sólo con la misma `Idempotency-Key` (con `db/local-additions.sql` aplicado) |
 
-Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable. Cada fila tiene su test por HTTP; las de 500 y 503 están en `test/failures.e2e-spec.ts` y `test/concurrency.e2e-spec.ts`. Con `db/local-additions.sql` aplicado, cada REJECTED y cada cancelación quedan en `order_events` con su motivo (D-07); sin él, el motivo queda sólo en la respuesta y el log.
+Los errores siguen RFC 9457 (`application/problem+json`) con un `code` estable. Cada fila tiene su test por HTTP, salvo la base que rechaza la conexión:
+
+- 500 y 503: `test/failures.e2e-spec.ts` y `test/concurrency.e2e-spec.ts`.
+- Base que rechaza la conexión: test unitario (`src/problem.spec.ts`).
+- Conexión perdida durante el COMMIT: `test/idempotency.e2e-spec.ts`. Responde 500, y el reintento con la misma clave recibe esa orden.
+- Con `db/local-additions.sql` aplicado, cada cambio de estado queda en `order_events`, y un REJECTED con su motivo (D-07). Sin él, el motivo queda sólo en la respuesta y el log.
 
 ## Revisar en 15 minutos
 
-1. `src/orders/orders.ts` `place()`: lock → leer instrumento, precio y disponible → decidir → insertar, en una transacción.
+1. `src/orders/orders.ts` `place()`: leer instrumento → lock → leer precio y disponible → decidir → insertar, en una transacción. El motivo de un REJECTED llega a `order_events` por `set_config('app.order_reason')`, que lee el trigger de `db/local-additions.sql`.
 2. `src/ledger.ts` `lockUser`: el lock por usuario. `src/db.ts`: los límites de tiempo de toda transacción.
 3. `src/orders/decide.ts` y `src/portfolio/positions.ts`: las reglas de negocio, puras, con tests unitarios.
 4. `test/concurrency.e2e-spec.ts`: la carrera, probada; `test/harness.ts` `assertInvariants` revisa cada base de test antes de cerrarla: nadie gastó más cash ni vendió más acciones de las que tenía.

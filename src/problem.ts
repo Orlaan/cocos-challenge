@@ -14,18 +14,22 @@ export class Problem extends Error {
   }
 }
 
-// Overload, not a bug: the client should retry. 55P03 = lock_timeout, 57014 = statement_timeout.
-const BUSY_SQLSTATES = ['55P03', '57014'];
+// Overload, not a bug: the client should retry. 55P03 = lock_timeout, 57014 = statement_timeout,
+// 25P03 = idle_in_transaction_session_timeout (Postgres rolled the transaction back).
+const BUSY_SQLSTATES = ['55P03', '57014', '25P03'];
 const POOL_TIMEOUT = /timeout exceeded when trying to connect/;
+// The database refused the connection when the pool opened it: no query was sent. (An unknown host is
+// a configuration error, not overload: a 500.)
+const CONNECT_REFUSED = 'ECONNREFUSED';
 
 /** Why a request failed without saving anything, so a retry is safe; undefined for any other error. */
 function busyCause(error: unknown): string | undefined {
   const { code, message } = (error ?? {}) as { code?: string; message?: string };
   if (BUSY_SQLSTATES.includes(code ?? '')) return code;
   if (POOL_TIMEOUT.test(message ?? '')) return 'pool';
+  if (code === CONNECT_REFUSED) return code;
   // Postgres ended a transaction left idle over 2 s (src/db.ts); its next query finds the connection gone.
-  // Our queries run only inside the transaction, before COMMIT, so nothing was saved. Guarded by the
-  // "stalled in Node" test in test/failures.e2e-spec.ts: a TypeORM upgrade that changes this error fails it.
+  // Our queries run only inside the transaction, before COMMIT, so nothing was saved.
   if (error instanceof QueryRunnerAlreadyReleasedError) return 'idle';
 }
 
@@ -58,7 +62,7 @@ export function toProblem(error: unknown): Problem {
     log.warn(JSON.stringify({ event: 'busy', cause }));
     return new Problem(503, 'BUSY', 'The service is busy. Retry.');
   }
-  // Anything else, a dropped connection included, is a 500: the outcome may be unknown
+  // Anything else, a connection dropped mid-transaction included, is a 500: the outcome may be unknown
   // (a connection lost at COMMIT), so only a retry with the same Idempotency-Key is safe.
   log.error(error);
   return new Problem(500, 'INTERNAL_ERROR');

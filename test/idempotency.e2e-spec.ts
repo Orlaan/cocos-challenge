@@ -1,4 +1,5 @@
-import { holdUserRow, orderCount, startApi, TestApi, waitForLockWaiters } from './harness';
+import request from 'supertest';
+import { appOn, dropAfterCommit, holdUserRow, orderCount, startApi, TestApi, waitForLockWaiters } from './harness';
 
 const GGAL = 34;
 const YPFD = 50;
@@ -86,6 +87,28 @@ describe('Idempotency-Key on POST /users/:userId/orders', () => {
     }
 
     const retry = await send(order, 'lost').expect(201);
+    expect(retry.headers['idempotent-replayed']).toBe('true');
+    expect(await orderCount(api.db)).toBe(before + 1);
+  });
+
+  it('the connection lost during COMMIT: 500, since the order may be saved; the retry with the same key gets it', async () => {
+    const before = await orderCount(api.db);
+    const proxy = await dropAfterCommit(api.url);
+    const app = await appOn(proxy.url);
+    try {
+      const res = await request(app.getHttpServer()).post('/users/1/orders').set('Idempotency-Key', 'commit').send(order);
+      expect(res.status).toBe(500); // not 503: a 503 says nothing was saved
+    } finally {
+      await app.close();
+      proxy.close();
+    }
+
+    const deadline = Date.now() + 5000;
+    while ((await orderCount(api.db)) === before) {
+      if (Date.now() > deadline) throw new Error('the COMMIT never reached the database');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const retry = await send(order, 'commit').expect(201);
     expect(retry.headers['idempotent-replayed']).toBe('true');
     expect(await orderCount(api.db)).toBe(before + 1);
   });

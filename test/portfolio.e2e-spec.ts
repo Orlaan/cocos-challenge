@@ -35,6 +35,15 @@ describe('GET /users/:userId/portfolio', () => {
     });
   });
 
+  it('a transfer moves its size in pesos, whatever its price column holds (the brief: "utilizando la columna size")', async () => {
+    const other = await startApi();
+    await other.db.query(`INSERT INTO orders (instrumentid, userid, size, price, side, status, type, datetime) VALUES
+      (66, 2, 1000, 2, 'CASH_IN', 'FILLED', 'MARKET', now()), (66, 2, 300, 2, 'CASH_OUT', 'FILLED', 'MARKET', now())`);
+    const res = await other.http().get('/users/2/portfolio').expect(200);
+    expect(res.body.cash.balance).toBe('700.00'); // 1,000 − 300, not 2 × that
+    await other.close();
+  });
+
   it('a position with no market price → value null, left out of the total, and listed as unpriced', async () => {
     const other = await startApi();
     await other.db.query(`INSERT INTO orders (instrumentid, userid, size, price, side, status, type, datetime) VALUES
@@ -69,7 +78,7 @@ describe('GET /users/:userId/portfolio', () => {
     expect(res.body).toMatchObject({ status: 404, code: 'USER_NOT_FOUND' });
   });
 
-  it.each(['abc', '0', '-1', '1.5', '2147483648', '99999999999'])('userId "%s" → 400', async (id) => {
+  it.each(['abc', '0', '-1', '1.5', '2147483648', '99999999999', '0x1', '1e3', '01'])('userId "%s" → 400', async (id) => {
     await api.http().get(`/users/${id}/portfolio`).expect(400);
   });
 

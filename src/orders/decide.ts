@@ -2,12 +2,12 @@ import Decimal from '../money';
 import { INT_MAX } from '../limits';
 import type { PlaceOrder } from './order.dto';
 
-export type Status = 'FILLED' | 'NEW' | 'REJECTED';
+export type OrderStatus = 'NEW' | 'FILLED' | 'REJECTED' | 'CANCELLED';
 export type Reason = 'INSUFFICIENT_FUNDS' | 'INSUFFICIENT_SHARES' | 'NO_MARKET_PRICE';
 export type Invalid = 'AMOUNT_BELOW_ONE_SHARE' | 'AMOUNT_TOO_LARGE' | 'AMOUNT_NEEDS_A_PRICE';
 
 export interface Decision {
-  status: Status;
+  status: Exclude<OrderStatus, 'CANCELLED'>; // a new order is never born cancelled
   size: number;
   price: Decimal | null;
   reason?: Reason;

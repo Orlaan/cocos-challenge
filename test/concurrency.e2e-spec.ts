@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import * as ledger from '../src/ledger';
 import Decimal from '../src/money';
 import { holdUserRow, startApi, TestApi, waitForLockWaiters } from './harness';
 
@@ -58,6 +59,21 @@ describe('concurrent orders for one user', () => {
     expect(results.find((r) => r.body.status === 'REJECTED')!.body.reason).toBe('INSUFFICIENT_SHARES');
   });
 
+  it('LIMIT and MARKET SELLs mixed, in parallel: held shares count, exactly as if sent one by one', async () => {
+    const holder = await holdUserRow(api.url);
+    const limit = { instrumentId: METR, side: 'SELL', type: 'LIMIT', size: 120, price: '99999.00' }; // never fills: holds 120
+    const market = { instrumentId: METR, side: 'SELL', type: 'MARKET', size: 120 };
+    const pending = Promise.all([send(limit), send(market), send(limit), send(market), send(limit)]);
+    await waitForLockWaiters(api.db, 5);
+    await holder.query('COMMIT');
+    await holder.end();
+
+    const results = await pending;
+    expect(results.filter((r) => r.body.status === 'REJECTED').map((r) => r.body.reason)).toEqual(['INSUFFICIENT_SHARES']);
+    const { positions } = (await api.http().get('/users/1/portfolio')).body;
+    expect(positions.find((p: { instrumentId: number }) => p.instrumentId === METR).availableQuantity).toBe(20); // 500 − 4 × 120
+  });
+
   it('a cancel does not wait for the user lock, and the waiting order then sees the freed cash', async () => {
     const holder = await holdUserRow(api.url);
     // 733 GGAL = 649,291.40: more than the 627,500 available, less than 627,500 + the 90,000 order 7 holds.
@@ -68,6 +84,29 @@ describe('concurrent orders for one user', () => {
     await holder.end();
 
     expect((await pending).body.status).toBe('FILLED');
+  });
+
+  it('a cancel that lands after a waiting order read its cash: the order rejects, it never spends the freed cash', async () => {
+    let readCash!: () => void;
+    let resume!: () => void;
+    const hasRead = new Promise<void>((r) => (readCash = r));
+    const cancelled = new Promise<void>((r) => (resume = r));
+    const real = ledger.cash;
+    // Replacing a module export works because ts-jest compiles to CommonJS (orders.ts calls ledger_1.cash).
+    jest.spyOn(ledger, 'cash').mockImplementationOnce(async (...args) => {
+      const seen = await real(...args); // 627,500 available: order 7 still holds 90,000
+      readCash();
+      await cancelled;
+      return seen;
+    });
+    const big = { instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '650000' }; // needs the 90,000 too
+    const pending = fire(big);
+    await hasRead;
+    await api.http().post('/users/1/orders/7/cancel').expect(200);
+    resume();
+
+    expect((await pending).body).toMatchObject({ status: 'REJECTED', reason: 'INSUFFICIENT_FUNDS' });
+    expect((await send(big)).body.status).toBe('FILLED'); // sent again, it sees the freed cash
   });
 
   describe('while another transaction holds the user row', () => {

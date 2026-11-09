@@ -10,7 +10,6 @@ import { Problem, ProblemFilter } from './problem';
 const validation = new ValidationPipe({
   whitelist: true,
   forbidNonWhitelisted: true,
-  transform: true,
   exceptionFactory: (errors) =>
     new Problem(400, 'VALIDATION_ERROR', errors.flatMap((e) => Object.values(e.constraints ?? {})).join('; ')),
 });

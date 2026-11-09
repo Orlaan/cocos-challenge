@@ -28,6 +28,7 @@ describe('POST /users/:userId/orders', () => {
     it('MARKET BUY by amount → buys the most whole shares the amount covers', async () => {
       const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', amount: '10000' }).expect(201);
       expect(res.body).toMatchObject({ size: 11, price: '885.80', status: 'FILLED' }); // floor(10000 / 885.80)
+      expect(await available()).toBe('617756.20'); // 627,500 − 11 × 885.80, not − 10,000
     });
 
     it('LIMIT BUY → 201 NEW at the limit price, and its cost is held', async () => {
@@ -95,9 +96,13 @@ describe('POST /users/:userId/orders', () => {
     const events = async (orderId: number) =>
       (await api.db.query('SELECT status, reason FROM order_events WHERE orderid = $1 ORDER BY id', [orderId])).rows;
 
-    it('a REJECTED order keeps its reason in the database', async () => {
-      const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 100000 }).expect(201);
-      expect(await events(res.body.id)).toEqual([{ status: 'REJECTED', reason: 'INSUFFICIENT_FUNDS' }]);
+    it.each([
+      ['INSUFFICIENT_FUNDS', { instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 100000 }],
+      ['INSUFFICIENT_SHARES', { instrumentId: GGAL, side: 'SELL', type: 'MARKET', size: 100000 }],
+      ['NO_MARKET_PRICE', { instrumentId: 3, side: 'BUY', type: 'MARKET', size: 1 }], // PGR has no marketdata
+    ])('a REJECTED order keeps its reason in the database: %s', async (reason, body) => {
+      const res = await send(body).expect(201);
+      expect(await events(res.body.id)).toEqual([{ status: 'REJECTED', reason }]);
     });
 
     it('a seed order cancelled now keeps its history too: NEW, then CANCELLED', async () => {
@@ -109,28 +114,6 @@ describe('POST /users/:userId/orders', () => {
       const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'LIMIT', size: 1, price: '800.00' }).expect(201);
       await api.http().post(`/users/1/orders/${res.body.id}/cancel`).expect(200);
       expect(await events(res.body.id)).toEqual([{ status: 'NEW', reason: null }, { status: 'CANCELLED', reason: null }]);
-    });
-
-    it('a saved order cannot be edited, only its status changes', async () => {
-      const error = await api.db.query(`UPDATE orders SET price = price + 1 WHERE id = 1`).catch((e) => e);
-      expect(error.message).toMatch(/only status can change/);
-    });
-
-    it('only a NEW order changes status: FILLED is final', async () => {
-      const error = await api.db.query(`UPDATE orders SET status = 'CANCELLED' WHERE id = 1`).catch((e) => e);
-      expect(error.message).toMatch(/a FILLED order is final/);
-    });
-
-    it('a NEW order can only become FILLED or CANCELLED', async () => {
-      const error = await api.db.query(`UPDATE orders SET status = 'REJECTED' WHERE id = 5`).catch((e) => e); // seed order 5 is NEW
-      expect(error.message).toMatch(/can only be FILLED or CANCELLED/);
-    });
-
-    it('the history cannot be changed or removed', async () => {
-      for (const change of ['UPDATE order_events SET status = status', 'DELETE FROM order_events']) {
-        const error = await api.db.query(change).catch((e) => e);
-        expect(error.message).toMatch(/append-only/);
-      }
     });
 
     it('an UPDATE that leaves the status as it was adds no event', async () => {

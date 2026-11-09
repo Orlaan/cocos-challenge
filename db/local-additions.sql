@@ -16,8 +16,7 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
   PRIMARY KEY (userid, key)
 );
--- Keys are kept: one row per keyed order. At scale, a daily job can delete old ones (a deleted key works as new):
---   DELETE FROM idempotency_keys WHERE created_at < now() - interval '24 hours';
+-- Keys are kept: one row per keyed order (D-13).
 
 -- Audit trail: every status an order takes, with the reason of a rejection. A trigger writes it, so a
 -- change made outside the API (ops running SQL) is recorded too. The API passes the reason in the
@@ -38,16 +37,6 @@ ORDER BY id;
 
 CREATE OR REPLACE FUNCTION record_order_event() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF TG_OP = 'UPDATE' AND (NEW.instrumentid, NEW.userid, NEW.size, NEW.price, NEW.type, NEW.side, NEW.datetime)
-      IS DISTINCT FROM (OLD.instrumentid, OLD.userid, OLD.size, OLD.price, OLD.type, OLD.side, OLD.datetime) THEN
-    RAISE EXCEPTION 'orders are a legal record: only status can change (order %)', OLD.id;
-  END IF;
-  IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status AND OLD.status IS DISTINCT FROM 'NEW' THEN
-    RAISE EXCEPTION 'orders are a legal record: a % order is final (order %)', OLD.status, OLD.id;
-  END IF;
-  IF TG_OP = 'UPDATE' AND OLD.status = 'NEW' AND NEW.status NOT IN ('NEW', 'FILLED', 'CANCELLED') THEN
-    RAISE EXCEPTION 'orders are a legal record: a NEW order can only be FILLED or CANCELLED (order %)', OLD.id;
-  END IF;
   IF TG_OP = 'UPDATE' AND NEW.status IS NOT DISTINCT FROM OLD.status THEN RETURN NULL; END IF; -- no change, no event
   INSERT INTO order_events (orderid, status, reason)
   VALUES (NEW.id, NEW.status, NULLIF(current_setting('app.order_reason', true), ''));
@@ -59,15 +48,6 @@ CREATE TRIGGER order_events AFTER INSERT OR UPDATE ON orders
   FOR EACH ROW EXECUTE FUNCTION record_order_event();
 
 CREATE INDEX IF NOT EXISTS order_events_orderid ON order_events (orderid, id); -- an order's history, in order
-
--- The history is append-only: an event, once written, is never changed or removed.
-CREATE OR REPLACE FUNCTION order_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  RAISE EXCEPTION 'order_events is append-only';
-END $$;
-DROP TRIGGER IF EXISTS order_events_append_only ON order_events;
-CREATE TRIGGER order_events_append_only BEFORE UPDATE OR DELETE ON order_events
-  FOR EACH ROW EXECUTE FUNCTION order_events_append_only();
 
 -- Every money read filters a user's orders, under the user lock: keep that scan short.
 -- (userid first serves cash(); status second serves the NEW/FILLED filters.)
