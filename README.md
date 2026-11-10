@@ -44,8 +44,8 @@ Orden: `{ "instrumentId": 34, "side": "BUY", "type": "MARKET", "size": 10 }`, o 
 |---|---|---|
 | MARKET con fondos o acciones | 201 `FILLED` | sí |
 | LIMIT con fondos o acciones (los reserva) | 201 `NEW` | sí |
-| Más que el disponible, vender BMA, o MARKET sin precio | 201 `REJECTED` + `reason` | sí |
-| Body inválido, `CASH_IN`/`CASH_OUT`, comprar ARS, monto fuera de rango o sin precio para calcularlo | 400 | no |
+| Más que el disponible, vender BMA, MARKET sin precio, o monto menor a una acción | 201 `REJECTED` + `reason` | sí |
+| Body inválido, `CASH_IN`/`CASH_OUT`, comprar ARS o monto fuera de rango | 400 | no |
 | Body de más de 100 kB / charset que no es UTF-8 | 413 / 415 | no |
 | Usuario, instrumento u orden inexistente o ajena | 404 | no |
 | Cancelar una orden que no está NEW | 409 | no |

@@ -51,12 +51,13 @@ describe('decide', () => {
     expect(decide(order({ type: 'LIMIT', size: 1, price: '10' }), noData)).toMatchObject({ status: 'NEW' });
   });
 
-  it('MARKET by amount without market data is invalid: no size can be computed', () => {
-    expect(decide(order({ amount: '100' }), { ...ctx, close: null })).toEqual({ invalid: 'AMOUNT_NEEDS_A_PRICE' });
+  it('MARKET by amount without market data → REJECTED NO_MARKET_PRICE, size 0: no size can be computed', () => {
+    expect(decide(order({ amount: '100' }), { ...ctx, close: null })).toEqual({ status: 'REJECTED', size: 0, price: null, reason: 'NO_MARKET_PRICE' });
   });
 
-  it('amount below one share is invalid, not a REJECTED order', () => {
-    expect(decide(order({ amount: '99.99' }), ctx)).toEqual({ invalid: 'AMOUNT_BELOW_ONE_SHARE' });
+  it('amount below one share → REJECTED AMOUNT_BELOW_ONE_SHARE, size 0, at the price used', () => {
+    expect(decide(order({ amount: '99.99' }), ctx)).toEqual({ status: 'REJECTED', size: 0, price: new Decimal(100), reason: 'AMOUNT_BELOW_ONE_SHARE' });
+    expect(decide(order({ type: 'LIMIT', amount: '89.99', price: '90' }), ctx)).toEqual({ status: 'REJECTED', size: 0, price: new Decimal(90), reason: 'AMOUNT_BELOW_ONE_SHARE' });
   });
 
   it('a computed size above the INT column is invalid', () => {

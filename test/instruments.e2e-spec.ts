@@ -34,6 +34,10 @@ describe('GET /instruments?q=', () => {
   it('treats % and _ as plain characters, not wildcards', async () => {
     expect(await tickers('%')).toEqual([]);
     expect(await tickers('_')).toEqual([]);
+    // Unescaped, `_` matches any one character and `%` any text: each query would also find ZZX9.
+    await api.db.query(`INSERT INTO instruments (ticker, name, type) VALUES ('ZZ_9', '50% Test', 'ACCIONES'), ('ZZX9', '50X Test', 'ACCIONES')`);
+    expect(await tickers('ZZ_9')).toEqual(['ZZ_9']);
+    expect(await tickers('50%')).toEqual(['ZZ_9']);
   });
 
   it('returns at most 20 instruments', async () => {
@@ -48,6 +52,8 @@ describe('GET /instruments?q=', () => {
     ['missing', undefined],
     ['blank', '   '],
     ['longer than 50 characters', 'x'.repeat(51)],
+    ['a NUL byte (Postgres text cannot hold it)', '\0'],
+    ['a NUL byte inside', 'a\0b'],
   ])('q %s → 400', async (_, q) => {
     const res = await search(q).expect(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');

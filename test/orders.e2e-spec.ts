@@ -84,11 +84,27 @@ describe('POST /users/:userId/orders', () => {
       expect(res.body).toMatchObject({ status: 'REJECTED', reason: 'NO_MARKET_PRICE', size: 1, price: null });
     });
 
-    it('MARKET by amount with no market data → 400: no size can be computed, so it is not an order', async () => {
+    it('MARKET by amount with no market data → NO_MARKET_PRICE, size 0: no size can be computed', async () => {
       const before = await orderCount(api.db);
-      const res = await send({ instrumentId: PGR, side: 'BUY', type: 'MARKET', amount: '1000' }).expect(400);
-      expect(res.body.code).toBe('AMOUNT_NEEDS_A_PRICE');
-      expect(await orderCount(api.db)).toBe(before);
+      const res = await send({ instrumentId: PGR, side: 'BUY', type: 'MARKET', amount: '1000' }).expect(201);
+      expect(res.body).toMatchObject({ status: 'REJECTED', reason: 'NO_MARKET_PRICE', size: 0, price: null });
+      expect(await orderCount(api.db)).toBe(before + 1);
+    });
+
+    it('amount below the price of one share → AMOUNT_BELOW_ONE_SHARE, size 0, at the price used', async () => {
+      const before = await orderCount(api.db);
+      const res = await send({ instrumentId: YPFD, side: 'BUY', type: 'MARKET', amount: '100' }).expect(201);
+      expect(res.body).toMatchObject({ status: 'REJECTED', reason: 'AMOUNT_BELOW_ONE_SHARE', size: 0, price: '7837.50' });
+      expect(await orderCount(api.db)).toBe(before + 1);
+    });
+
+    it('a size-0 REJECTED order changes no cash, hold or position', async () => {
+      const portfolio = async () => (await api.http().get('/users/1/portfolio').expect(200)).body;
+      const before = await portfolio();
+      await send({ instrumentId: YPFD, side: 'BUY', type: 'MARKET', amount: '100' }).expect(201);
+      await send({ instrumentId: PAMP, side: 'SELL', type: 'LIMIT', amount: '100', price: '1000' }).expect(201);
+      await send({ instrumentId: PGR, side: 'BUY', type: 'MARKET', amount: '1000' }).expect(201);
+      expect(await portfolio()).toEqual(before);
     });
   });
 
@@ -144,13 +160,6 @@ describe('POST /users/:userId/orders', () => {
       const before = await orderCount(api.db);
       const res = await send({ instrumentId: DOME, side: 'BUY', type: 'MARKET', amount: '1000000000000' }).expect(400);
       expect(res.body.code).toBe('AMOUNT_TOO_LARGE');
-      expect(await orderCount(api.db)).toBe(before);
-    });
-
-    it('amount below the price of one share → AMOUNT_BELOW_ONE_SHARE', async () => {
-      const before = await orderCount(api.db);
-      const res = await send({ instrumentId: YPFD, side: 'BUY', type: 'MARKET', amount: '100' }).expect(400);
-      expect(res.body.code).toBe('AMOUNT_BELOW_ONE_SHARE');
       expect(await orderCount(api.db)).toBe(before);
     });
 

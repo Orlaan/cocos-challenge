@@ -38,6 +38,17 @@ describe('Idempotency-Key on POST /users/:userId/orders', () => {
     expect(again.body.reason).toBe('INSUFFICIENT_FUNDS');
   });
 
+  it('a replayed size-0 REJECTED order (amount below one share) keeps its reason', async () => {
+    const below = { instrumentId: YPFD, side: 'BUY', type: 'MARKET', amount: '100' };
+    const before = await orderCount(api.db);
+    const first = await send(below, 'small-buy').expect(201);
+    const again = await send(below, 'small-buy').expect(201);
+    expect(again.headers['idempotent-replayed']).toBe('true');
+    expect(again.body).toEqual(first.body);
+    expect(again.body).toMatchObject({ status: 'REJECTED', size: 0, reason: 'AMOUNT_BELOW_ONE_SHARE' });
+    expect(await orderCount(api.db)).toBe(before + 1);
+  });
+
   it('the same money in another spelling is the same request ("10000" = "10000.00")', async () => {
     const byAmount = { instrumentId: GGAL, side: 'BUY', type: 'MARKET' };
     const first = await send({ ...byAmount, amount: '10000' }, 'spelling').expect(201);

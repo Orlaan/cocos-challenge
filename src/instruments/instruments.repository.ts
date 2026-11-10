@@ -9,7 +9,7 @@ export interface Instrument {
 
 /** Partial, case-insensitive match on ticker or name; exact ticker first. ARS (MONEDA) is cash, not a tradable asset. */
 export function search(sql: Sql, q: string): Promise<Instrument[]> {
-  const pattern = `%${q.replace(/[\%_]/g, (c) => `\${c}`)}%`;
+  const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   return sql<Instrument>(
     `SELECT id, ticker, name, type
      FROM instruments

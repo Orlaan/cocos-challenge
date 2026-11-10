@@ -12,6 +12,9 @@ export class InstrumentsController {
     if (term.length < 1 || term.length > 50) {
       throw new Problem(400, 'VALIDATION_ERROR', 'q must have 1 to 50 characters');
     }
+    if (term.includes('\0')) {
+      throw new Problem(400, 'VALIDATION_ERROR', 'q must not contain a NUL byte'); // Postgres text cannot hold it
+    }
     return this.instruments.search(term);
   }
 }

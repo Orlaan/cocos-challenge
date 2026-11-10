@@ -29,11 +29,11 @@ Total = valor de mercado / costo de las acciones en cartera − 1; una venta sac
 `NUMERIC` llega como string y se calcula con `decimal.js` a 40 dígitos (`src/money.ts`). El dinero viaja como string decimal (`"price": "900.00"`); un número JSON → 400. Los límites salen del esquema (`src/limits.ts` y los patrones de `src/orders/order.dto.ts`).
 
 ## D-07 Un rechazo de negocio es una orden guardada
-"Tiene que ser rechazada y guardarse en estado REJECTED": 201 con `status: REJECTED` y un `reason`. Una request mal formada es 400 y no guarda nada. El `reason` va en la respuesta y el log: `orders` no tiene columna para él.
+"Tiene que ser rechazada y guardarse en estado REJECTED": 201 con `status: REJECTED` y un `reason`. Lo que depende del precio del momento también es un rechazo del mercado (D-08). Una request mal formada es 400 y no guarda nada. El `reason` va en la respuesta y el log: `orders` no tiene columna para él.
 **A escala:** el `reason` como columna de `order_events` (D-10).
 
 ## D-08 Orden por monto
-`size = floor(amount / precio)`. Menos de una acción → 400 `AMOUNT_BELOW_ONE_SHARE`; más de un INT → 400 `AMOUNT_TOO_LARGE`; MARKET sin precio → 400 `AMOUNT_NEEDS_A_PRICE`. Se reserva `size × precio`, no el monto.
+`size = floor(amount / precio)`. Menos de una acción → REJECTED `AMOUNT_BELOW_ONE_SHARE` con el precio usado; MARKET sin precio → REJECTED `NO_MARKET_PRICE`. Las dos con `size` 0: no mueven cash, reservas ni posiciones. Más de un INT → 400 `AMOUNT_TOO_LARGE`: `orders.size` no lo puede guardar. Se reserva `size × precio`, no el monto.
 
 ## D-09 Cancelación atómica
 `UPDATE … SET status = 'CANCELLED' WHERE id = $1 AND userid = $2 AND status = 'NEW'`: chequeo y cambio en un paso. Sin el lock, una orden en paralelo a lo sumo ve menos disponible del que hay. Orden ajena → 404; no NEW → 409. `order_events` guarda NEW y después CANCELLED.
@@ -53,6 +53,10 @@ BMA queda en −10 acciones (la orden 11 vende 30 con 20): su valor negativo res
 ## D-13 Idempotencia
 Con `Idempotency-Key`, la clave se busca y se guarda bajo el mismo lock y en la misma transacción que la orden: 5 reintentos paralelos crean 1 orden y los otros reciben la misma respuesta (`Idempotent-Replayed: true`). Misma clave con otro body → 422 (`"10000"` y `"10000.00"` son el mismo). La clave es opcional porque el enunciado define el endpoint sin ella; sin clave, cada request es nueva.
 **Descarté** Redis (puede desincronizarse de la orden) e ignorar el header donde no hay tabla (prometería un reintento seguro). **A escala:** borrar claves de más de 24 h por `created_at`.
+
+## D-14 Transferencias: se cuentan, no se crean
+El ledger suma CASH_IN y CASH_OUT (D-02), pero el endpoint de órdenes sólo acepta BUY y SELL: el enunciado dice que las transferencias "se pueden modelar como ordenes", es opcional. Fondear la cuenta pide autenticación y otra validación: un CASH_OUT tiene que tomar el lock y chequear el cash disponible.
+**A escala:** endpoints de depósito y retiro aparte, autenticados, con el mismo lock por usuario.
 
 ## Cómo usé IA
 Escribí la solución con agentes de IA y verifiqué cada garantía rompiendo el código: sin el lock, sin `NULLS LAST` o con un `statement_timeout` mayor, su test falla.
