@@ -7,7 +7,7 @@ Sin entidades ni repositorios: el esquema es fijo y las cuentas de dinero son ag
 **Descarté** Prisma o entidades TypeORM (un modelo que esconde el SQL a defender) y `pg.Pool` directo (TypeORM es el stack de Cocos). Tampoco `@nestjs/typeorm`: sin entidades no aporta repositorios, y sus reintentos por defecto esconden una URL mala ~27 s; `DatabaseModule` da el mismo `DataSource` global. Ni `@nestjs/config`: son dos variables.
 
 ## D-02 Cash y posiciones se derivan de `orders`
-Lo pide el enunciado. Cash = CASH_IN − CASH_OUT (`size`) + SELL − BUY (`size × price`) de las FILLED (`cash` en `src/ledger.ts`). Las posiciones pliegan las FILLED en orden de `id`, que bajo el lock es el de ejecución (`foldPositions`). `datetime` no tiene zona: leo y escribo UTC.
+Lo pide el enunciado. Cash = CASH_IN − CASH_OUT (`size`) + SELL − BUY (`size × price`) de las FILLED (`cash` en `src/ledger.repository.ts`). Las posiciones pliegan las FILLED en orden de `id`, que bajo el lock es el de ejecución (`foldPositions`). `datetime` no tiene zona: leo y escribo UTC.
 **Descarté** una tabla `positions`: estado duplicado para 11 órdenes. **A escala:** esa tabla, escrita en la misma transacción, con reconciliación nocturna contra `orders`.
 
 ## D-03 Una orden NEW reserva

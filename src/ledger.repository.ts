@@ -17,6 +17,12 @@ export async function lockUser(sql: Sql, userId: number): Promise<void> {
   if (!user) throw new Problem(404, 'USER_NOT_FOUND');
 }
 
+/** For reads that need the user to exist but must not wait on their lock. */
+export async function userExists(sql: Sql, userId: number): Promise<boolean> {
+  const [user] = await sql('SELECT id FROM users WHERE id = $1', [userId]);
+  return Boolean(user);
+}
+
 export interface Cash {
   balance: Decimal;
   reserved: Decimal;

@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import * as ledger from '../src/ledger';
+import * as ledger from '../src/ledger.repository';
 import Decimal from '../src/money';
 import { holdUserRow, startApi, TestApi, waitForLockWaiters } from './harness';
 
@@ -91,7 +91,7 @@ describe('concurrent orders for one user', () => {
     const hasRead = new Promise<void>((r) => (readCash = r));
     const cancelled = new Promise<void>((r) => (resume = r));
     const real = ledger.cash;
-    // Replacing a module export works because ts-jest compiles to CommonJS (orders.service.ts calls ledger_1.cash).
+    // Replacing a module export works because ts-jest compiles to CommonJS (orders.service.ts calls ledger_repository_1.cash).
     jest.spyOn(ledger, 'cash').mockImplementationOnce(async (...args) => {
       const seen = await real(...args); // 627,500 available: order 7 still holds 90,000
       readCash();

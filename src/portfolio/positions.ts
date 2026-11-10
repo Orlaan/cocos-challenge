@@ -1,6 +1,6 @@
 import Decimal from '../money';
-import type { Trade } from '../ledger';
-import type { Quote } from '../marketdata';
+import type { Trade } from '../ledger.repository';
+import type { Quote } from '../marketdata.repository';
 
 export interface Position {
   instrumentId: number;

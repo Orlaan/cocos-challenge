@@ -1,5 +1,5 @@
-import type { Trade } from '../ledger';
-import type { Quote } from '../marketdata';
+import type { Trade } from '../ledger.repository';
+import type { Quote } from '../marketdata.repository';
 import { foldPositions } from './positions';
 
 const trade = (side: 'BUY' | 'SELL', size: number, price: string, instrumentId = 1): Trade => ({

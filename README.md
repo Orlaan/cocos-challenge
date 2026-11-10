@@ -59,6 +59,6 @@ Errores en RFC 9457 (`application/problem+json`) con un `code` estable. Cada fil
 ## Revisar en 15 minutos
 
 1. `src/orders/orders.service.ts` `place()`: lock → instrumento, precio y disponible → decidir → insertar, en una transacción.
-2. `src/ledger.ts` `lockUser` y `src/database/db.ts`: el lock por usuario y los límites de tiempo.
+2. `src/ledger.repository.ts` `lockUser` y `src/database/db.ts`: el lock por usuario y los límites de tiempo.
 3. `src/orders/decide.ts` y `src/portfolio/positions.ts`: reglas de negocio puras, con tests unitarios.
 4. `test/concurrency.e2e-spec.ts`: la carrera, probada. `test/harness.ts` `assertInvariants` revisa cada base antes de cerrarla.

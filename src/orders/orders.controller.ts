@@ -3,7 +3,8 @@ import type { Response } from 'express';
 import { IdPipe } from '../common/id.pipe';
 import { Problem } from '../common/problem';
 import { keyError, PlaceOrder, shapeError } from './order.dto';
-import { Order, OrdersService } from './orders.service';
+import type { Order } from './orders.repository';
+import { OrdersService } from './orders.service';
 
 @Controller('users/:userId/orders')
 export class OrdersController {
