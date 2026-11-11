@@ -20,7 +20,15 @@ describe('POST /users/:userId/orders', () => {
   describe('accepted orders', () => {
     it('MARKET BUY by size → 201 FILLED at the latest close, cash goes down', async () => {
       const res = await send({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 10 }).expect(201);
-      expect(res.body).toMatchObject({ instrumentId: GGAL, userId: 1, side: 'BUY', type: 'MARKET', size: 10, price: '885.80', status: 'FILLED' });
+      expect(res.body).toMatchObject({
+        instrumentId: GGAL,
+        userId: 1,
+        side: 'BUY',
+        type: 'MARKET',
+        size: 10,
+        price: '885.80',
+        status: 'FILLED',
+      });
       expect(res.body.datetime).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
       expect(await available()).toBe('618642.00'); // 627,500 − 8,858
     });

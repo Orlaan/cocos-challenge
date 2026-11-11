@@ -119,7 +119,9 @@ describe('concurrent orders for one user', () => {
     it('a MARKET order that waited fills at the close published while it waited', async () => {
       const pending = fire({ instrumentId: GGAL, side: 'BUY', type: 'MARKET', size: 1 });
       await waitForLockWaiters(api.db, 1);
-      await api.db.query(`INSERT INTO marketdata (instrumentid, date, close, previousclose) VALUES ($1, '2099-01-01', 900, 885.80)`, [GGAL]);
+      await api.db.query(`INSERT INTO marketdata (instrumentid, date, close, previousclose) VALUES ($1, '2099-01-01', 900, 885.80)`, [
+        GGAL,
+      ]);
       await holder.query('COMMIT');
       expect((await pending).body).toMatchObject({ status: 'FILLED', price: '900.00' });
     });

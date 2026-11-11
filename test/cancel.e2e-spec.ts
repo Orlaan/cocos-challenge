@@ -17,7 +17,10 @@ describe('POST /users/:userId/orders/:orderId/cancel', () => {
 
   it('cancelling a NEW SELL frees its shares: all of them can be sold again', async () => {
     const PAMP = 47; // user 1 holds 40
-    const sell = await api.http().post('/users/1/orders').send({ instrumentId: PAMP, side: 'SELL', type: 'LIMIT', size: 40, price: '2000.00' });
+    const sell = await api
+      .http()
+      .post('/users/1/orders')
+      .send({ instrumentId: PAMP, side: 'SELL', type: 'LIMIT', size: 40, price: '2000.00' });
     expect(sell.body.status).toBe('NEW');
     await cancel(sell.body.id).expect(200);
     const market = await api.http().post('/users/1/orders').send({ instrumentId: PAMP, side: 'SELL', type: 'MARKET', size: 40 });

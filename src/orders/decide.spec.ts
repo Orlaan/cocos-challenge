@@ -21,7 +21,10 @@ describe('decide', () => {
   });
 
   it('LIMIT amount uses the limit price: floor(1000 / 90) = 11', () => {
-    expect(decide(order({ type: 'LIMIT', amount: '1000', price: '90' }), { ...ctx, available: new Decimal(2000) })).toMatchObject({ size: 11, status: 'NEW' });
+    expect(decide(order({ type: 'LIMIT', amount: '1000', price: '90' }), { ...ctx, available: new Decimal(2000) })).toMatchObject({
+      size: 11,
+      status: 'NEW',
+    });
   });
 
   it('spending exactly all available cash is allowed', () => {
@@ -36,7 +39,11 @@ describe('decide', () => {
   });
 
   it('SELL by amount sells floor(amount / close) shares, if the user has them', () => {
-    expect(decide(order({ side: 'SELL', amount: '1000' }), shares(5))).toMatchObject({ status: 'REJECTED', size: 10, reason: 'INSUFFICIENT_SHARES' });
+    expect(decide(order({ side: 'SELL', amount: '1000' }), shares(5))).toMatchObject({
+      status: 'REJECTED',
+      size: 10,
+      reason: 'INSUFFICIENT_SHARES',
+    });
     expect(decide(order({ side: 'SELL', amount: '1000' }), shares(10))).toMatchObject({ status: 'FILLED', size: 10 });
   });
 
@@ -52,12 +59,27 @@ describe('decide', () => {
   });
 
   it('MARKET by amount without market data → REJECTED NO_MARKET_PRICE, size 0: no size can be computed', () => {
-    expect(decide(order({ amount: '100' }), { ...ctx, close: null })).toEqual({ status: 'REJECTED', size: 0, price: null, reason: 'NO_MARKET_PRICE' });
+    expect(decide(order({ amount: '100' }), { ...ctx, close: null })).toEqual({
+      status: 'REJECTED',
+      size: 0,
+      price: null,
+      reason: 'NO_MARKET_PRICE',
+    });
   });
 
   it('amount below one share → REJECTED AMOUNT_BELOW_ONE_SHARE, size 0, at the price used', () => {
-    expect(decide(order({ amount: '99.99' }), ctx)).toEqual({ status: 'REJECTED', size: 0, price: new Decimal(100), reason: 'AMOUNT_BELOW_ONE_SHARE' });
-    expect(decide(order({ type: 'LIMIT', amount: '89.99', price: '90' }), ctx)).toEqual({ status: 'REJECTED', size: 0, price: new Decimal(90), reason: 'AMOUNT_BELOW_ONE_SHARE' });
+    expect(decide(order({ amount: '99.99' }), ctx)).toEqual({
+      status: 'REJECTED',
+      size: 0,
+      price: new Decimal(100),
+      reason: 'AMOUNT_BELOW_ONE_SHARE',
+    });
+    expect(decide(order({ type: 'LIMIT', amount: '89.99', price: '90' }), ctx)).toEqual({
+      status: 'REJECTED',
+      size: 0,
+      price: new Decimal(90),
+      reason: 'AMOUNT_BELOW_ONE_SHARE',
+    });
   });
 
   it('a computed size above the INT column is invalid', () => {

@@ -16,14 +16,29 @@ describe('assertInvariants', () => {
   };
 
   it.each([
-    ['an overspend, then a deposit that covers it', [insert(`(${PAMP},1,1000,1000,'BUY','FILLED','MARKET',now())`), insert(`(66,1,10000000,1,'CASH_IN','FILLED','MARKET',now())`)]],
-    ['an overspend while a hold was open, then the hold cancelled', [insert(`(${PAMP},1,600,1000,'BUY','NEW','LIMIT',now())`), insert(`(${PAMP},1,100,1000,'BUY','FILLED','MARKET',now())`), cancel(12)]],
-    ['BMA bought back to the seed level, then oversold again', [insert(`(${BMA},1,10,1000,'BUY','FILLED','MARKET',now())`), insert(`(${BMA},1,10,1000,'SELL','FILLED','MARKET',now())`)]],
+    [
+      'an overspend, then a deposit that covers it',
+      [insert(`(${PAMP},1,1000,1000,'BUY','FILLED','MARKET',now())`), insert(`(66,1,10000000,1,'CASH_IN','FILLED','MARKET',now())`)],
+    ],
+    [
+      'an overspend while a hold was open, then the hold cancelled',
+      [insert(`(${PAMP},1,600,1000,'BUY','NEW','LIMIT',now())`), insert(`(${PAMP},1,100,1000,'BUY','FILLED','MARKET',now())`), cancel(12)],
+    ],
+    [
+      'BMA bought back to the seed level, then oversold again',
+      [insert(`(${BMA},1,10,1000,'BUY','FILLED','MARKET',now())`), insert(`(${BMA},1,10,1000,'SELL','FILLED','MARKET',now())`)],
+    ],
   ])('catches %s', async (_, steps) => {
     await expect(run(steps)).rejects.toThrow();
   });
 
   it('passes a hold, its cancel, then a fill of the freed cash', async () => {
-    await expect(run([insert(`(${PAMP},1,600,1000,'BUY','NEW','LIMIT',now())`), cancel(12), insert(`(${PAMP},1,600,1000,'BUY','FILLED','MARKET',now())`)])).resolves.toBeUndefined();
+    await expect(
+      run([
+        insert(`(${PAMP},1,600,1000,'BUY','NEW','LIMIT',now())`),
+        cancel(12),
+        insert(`(${PAMP},1,600,1000,'BUY','FILLED','MARKET',now())`),
+      ]),
+    ).resolves.toBeUndefined();
   });
 });

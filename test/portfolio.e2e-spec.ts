@@ -81,5 +81,4 @@ describe('GET /users/:userId/portfolio', () => {
   it.each(['abc', '0', '-1', '1.5', '2147483648', '99999999999', '0x1', '1e3', '01'])('userId "%s" → 400', async (id) => {
     await api.http().get(`/users/${id}/portfolio`).expect(400);
   });
-
 });

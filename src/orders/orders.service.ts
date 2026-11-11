@@ -54,9 +54,7 @@ export class OrdersService {
 
   /** Cash for a BUY, shares for a SELL: one query, because it runs under the lock. */
   private async available(sql: Sql, userId: number, order: PlaceOrder): Promise<Decimal> {
-    return order.side === 'BUY'
-      ? (await cash(sql, userId)).available
-      : new Decimal(await availableShares(sql, userId, order.instrumentId));
+    return order.side === 'BUY' ? (await cash(sql, userId)).available : new Decimal(await availableShares(sql, userId, order.instrumentId));
   }
 
   /** No user lock: cancelling only frees cash or shares (D-09). */

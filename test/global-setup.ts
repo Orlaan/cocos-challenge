@@ -7,6 +7,7 @@ import { Client } from 'pg';
 //   provided: exactly db/database.sql (the schema Cocos gives us)
 //   local:    database.sql + db/local-additions.sql (what docker compose runs)
 export default async function globalSetup() {
+  // prettier-ignore
   const container = await new PostgreSqlContainer('postgres:18')
     .withCommand([
       'postgres',
@@ -22,7 +23,10 @@ export default async function globalSetup() {
   const additions = readFileSync('db/local-additions.sql', 'utf8');
   const admin = new Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
-  for (const [name, sql] of [['provided', seed], ['local', seed + additions]]) {
+  for (const [name, sql] of [
+    ['provided', seed],
+    ['local', seed + additions],
+  ]) {
     await admin.query(`CREATE DATABASE ${name}`);
     const db = new Client({ connectionString: container.getConnectionUri().replace(/\/[^/]+$/, `/${name}`) });
     await db.connect();

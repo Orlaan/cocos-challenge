@@ -47,18 +47,15 @@ export function foldPositions(trades: Trade[], quotes: Map<number, Quote>): Posi
     }
     holdings.set(instrumentId, h);
   }
-  return [...holdings.values()]
-    .filter((h) => h.quantity !== 0)
-    .map((h) => value(h, quotes.get(h.instrumentId)));
+  return [...holdings.values()].filter((h) => h.quantity !== 0).map((h) => value(h, quotes.get(h.instrumentId)));
 }
 
 function value({ instrumentId, ticker, name, quantity, cost }: Holding, quote: Quote | undefined): Position {
   const close = quote && new Decimal(quote.close);
   const marketValue = close?.times(quantity);
   const totalReturn = marketValue && quantity > 0 && cost.gt(0) ? marketValue.div(cost).minus(1) : undefined;
-  const dailyReturn = close && quote.previousClose && !new Decimal(quote.previousClose).isZero()
-    ? close.div(quote.previousClose).minus(1)
-    : undefined;
+  const dailyReturn =
+    close && quote.previousClose && !new Decimal(quote.previousClose).isZero() ? close.div(quote.previousClose).minus(1) : undefined;
   return {
     instrumentId,
     ticker,

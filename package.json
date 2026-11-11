@@ -12,7 +12,18 @@
     "start:dev": "tsc -p tsconfig.build.json && node dist/main.js",
     "test": "jest --selectProjects unit",
     "test:e2e": "jest --selectProjects e2e --runInBand",
-    "verify": "tsc --noEmit -p tsconfig.json && npm test && npm run test:e2e"
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "verify": "npm run lint && npm run format:check && tsc --noEmit -p tsconfig.json && npm test && npm run test:e2e",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{js,mjs,json,yml}": "prettier --write"
   },
   "dependencies": {
     "@nestjs/common": "11.2.8",
@@ -27,6 +38,9 @@
     "typeorm": "1.1.2"
   },
   "devDependencies": {
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "@eslint/js": "10.0.1",
     "@nestjs/testing": "11.2.8",
     "@testcontainers/postgresql": "11.14.0",
     "@types/express": "5.0.6",
@@ -34,9 +48,15 @@
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
     "@types/supertest": "7.2.1",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "10.1.8",
+    "husky": "9.1.7",
     "jest": "30.5.2",
+    "lint-staged": "16.4.0",
+    "prettier": "3.9.10",
     "supertest": "7.3.2",
     "ts-jest": "29.4.15",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1"
   }
 }

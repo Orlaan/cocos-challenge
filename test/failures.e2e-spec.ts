@@ -46,7 +46,11 @@ describe('failure outcomes', () => {
       await new Promise((resolve) => setTimeout(resolve, 4000)); // idle in transaction, holding the user lock
       return real(...args);
     });
-    const stalled = api.http().post('/users/1/orders').send(order).then((r) => r);
+    const stalled = api
+      .http()
+      .post('/users/1/orders')
+      .send(order)
+      .then((r) => r);
     await holdsLock;
     const next = await api.http().post('/users/1/orders').send(order); // waits under 3 s, so no 503
     expect(next.status).toBe(201);

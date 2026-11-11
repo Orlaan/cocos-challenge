@@ -10,8 +10,7 @@ import { PortfolioModule } from './portfolio/portfolio.module';
 const validation = new ValidationPipe({
   whitelist: true,
   forbidNonWhitelisted: true,
-  exceptionFactory: (errors) =>
-    new Problem(400, 'VALIDATION_ERROR', errors.flatMap((e) => Object.values(e.constraints ?? {})).join('; ')),
+  exceptionFactory: (errors) => new Problem(400, 'VALIDATION_ERROR', errors.flatMap((e) => Object.values(e.constraints ?? {})).join('; ')),
 });
 
 // APP_PIPE and APP_FILTER as providers, not useGlobalPipes in main.ts, so the e2e tests run the same pipeline.

@@ -1,6 +1,7 @@
 import { DataSource, EntityManager } from 'typeorm';
 
 /** Runs one parameterised statement and returns its rows (also for UPDATE … RETURNING). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- each repository names its row type; any is only the default
 export type Sql = <T = any>(text: string, params?: unknown[]) => Promise<T[]>;
 
 export const POOL_SIZE = 10;

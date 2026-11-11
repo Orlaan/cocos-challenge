@@ -16,7 +16,8 @@ export async function replay<T>(sql: Sql, userId: number, key: string, order: Pl
     [userId, key],
   ).catch((error) => {
     // 42P01 = undefined table. The transaction rolls back: nothing is saved.
-    if (error.code === '42P01') throw new Problem(501, 'IDEMPOTENCY_UNAVAILABLE', 'Idempotency-Key needs db/local-additions.sql on this database');
+    if (error.code === '42P01')
+      throw new Problem(501, 'IDEMPOTENCY_UNAVAILABLE', 'Idempotency-Key needs db/local-additions.sql on this database');
     throw error;
   });
   if (!row) return null;
