@@ -108,6 +108,28 @@ describe('concurrent orders for one user', () => {
     expect((await send(big)).body.status).toBe('FILLED'); // sent again, it sees the freed cash
   });
 
+  it('two parallel cancels of one NEW order → one 200, one 409, its cash freed once', async () => {
+    const holder = new Client({ connectionString: api.url });
+    await holder.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT id FROM orders WHERE id = 5 FOR UPDATE'); // seed order 5: NEW LIMIT BUY, holds 35,500
+    const cancel = () => api.http().post('/users/1/orders/5/cancel');
+    const pending = Promise.all([cancel(), cancel()]);
+    await waitForLockWaiters(api.db, 2); // both UPDATEs wait on the order row
+    await holder.query('COMMIT');
+    await holder.end();
+
+    // The second UPDATE re-checks `status = 'NEW'` after the first commits, matches nothing: 409.
+    const [won, lost] = (await pending).sort((a, b) => a.status - b.status);
+    expect(won.body).toMatchObject({ id: 5, status: 'CANCELLED' });
+    expect(lost.status).toBe(409);
+    expect(lost.body.code).toBe('ORDER_NOT_CANCELLABLE');
+    const events = await api.db.query('SELECT status FROM order_events WHERE orderid = 5 ORDER BY id');
+    expect(events.rows).toEqual([{ status: 'NEW' }, { status: 'CANCELLED' }]);
+    const { cash } = (await api.http().get('/users/1/portfolio')).body;
+    expect(cash.available).toBe('663000.00'); // 627,500 + 35,500, once
+  });
+
   describe('while another transaction holds the user row', () => {
     let holder: Client;
     beforeEach(async () => (holder = await holdUserRow(api.url)));
