@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1030" viewBox="0 0 900 1030" font-family="Noto Sans, Segoe UI, Helvetica, Arial, sans-serif" fill="#24292F">
+  <title>Cómo se procesa POST /users/:userId/orders</title>
+  <desc>Flujo de una orden. El controller valida el body y la Idempotency-Key (si falla, 400). Después, en una sola transacción: lock por usuario con SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE (si espera más de 3 s, 503); chequeo de la Idempotency-Key después del lock (otro body, 422; sin tabla, 501; clave repetida con el mismo body devuelve la respuesta guardada); lectura del instrumento, el último close y el disponible; decide(), una regla pura sin I/O; INSERT de la orden, el trigger escribe order_events y, con clave, se guarda idempotency_keys. COMMIT y 201 con status FILLED, NEW o REJECTED.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#424A53"/>
+    </marker>
+    <marker id="arrow-err" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#C62828"/>
+    </marker>
+  </defs>
+
+  <!-- Card: white canvas with rounded corners, so it reads as a card on a dark page -->
+  <rect x="0" y="0" width="900" height="1030" rx="16" fill="#ffffff"/>
+  <rect x="1" y="1" width="898" height="1028" rx="15" fill="none" stroke="#D0D7DE" stroke-width="2"/>
+
+  <text x="40" y="42" font-size="22" font-weight="700">POST /users/:userId/orders</text>
+  <text x="40" y="66" font-size="14" fill="#57606A">Una orden, una transacción: lock por usuario, decidir, insertar.</text>
+  <text x="630" y="98" font-size="13" font-weight="600" fill="#B71C1C">Errores · nada se guarda</text>
+
+  <!-- Transaction container -->
+  <rect x="40" y="184" width="560" height="666" rx="14" fill="#F6F8FA" stroke="#D0D7DE" stroke-width="2"/>
+  <text x="60" y="208" font-size="14" font-weight="600" fill="#57606A">Transacción (BEGIN … COMMIT)</text>
+  <text x="60" y="226" font-size="12" fill="#57606A">lock 3 s · sentencia 5 s · inactiva 2 s</text>
+
+  <!-- Steps: green owned process boxes on one column -->
+  <g stroke="#2E7D32" stroke-width="2" fill="#E8F5E9">
+    <rect x="120" y="104" width="440" height="60" rx="14"/>
+    <rect x="120" y="240" width="440" height="96" rx="14"/>
+    <rect x="120" y="366" width="440" height="110" rx="14"/>
+    <rect x="120" y="506" width="440" height="80" rx="14"/>
+    <rect x="120" y="616" width="440" height="80" rx="14"/>
+    <rect x="120" y="726" width="440" height="100" rx="14"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="340" y="129" font-size="16" font-weight="600">1. Validar body e Idempotency-Key</text>
+    <text x="340" y="151" font-size="13" fill="#424A53">controller, antes de abrir la transacción</text>
+
+    <text x="340" y="265" font-size="16" font-weight="600">2. Lock por usuario</text>
+    <text x="340" y="289" font-size="13" font-weight="600" fill="#6639BA">SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE</text>
+    <text x="340" y="313" font-size="13" fill="#424A53">las órdenes del mismo usuario esperan acá, en fila</text>
+
+    <text x="340" y="394" font-size="16" font-weight="600">3. ¿La Idempotency-Key ya existe?</text>
+    <text x="340" y="418" font-size="13" fill="#424A53">sólo si vino el header; corre después del lock</text>
+    <text x="340" y="440" font-size="13" fill="#424A53">clave nueva: sigue</text>
+    <text x="340" y="460" font-size="13" fill="#424A53">repetida, mismo body: respuesta guardada</text>
+
+    <text x="340" y="534" font-size="16" font-weight="600">4. Leer precio y disponible</text>
+    <text x="340" y="556" font-size="13" fill="#424A53">tipo del instrumento · último close</text>
+    <text x="340" y="576" font-size="13" fill="#424A53">disponible: cash si BUY, acciones si SELL</text>
+
+    <text x="340" y="643" font-size="16" font-weight="600">5. decide(): regla pura, sin I/O</text>
+    <text x="340" y="665" font-size="13" font-weight="600" fill="#6639BA">decide(orden, { close, available })</text>
+    <text x="340" y="685" font-size="13" fill="#424A53">devuelve FILLED · NEW · REJECTED + reason</text>
+
+    <text x="340" y="752" font-size="16" font-weight="600">6. Guardar</text>
+    <text x="340" y="775" font-size="13" font-weight="600" fill="#6639BA">INSERT INTO orders … RETURNING</text>
+    <text x="340" y="795" font-size="13" fill="#424A53">el trigger escribe order_events</text>
+    <text x="340" y="815" font-size="13" fill="#424A53">con clave: INSERT INTO idempotency_keys</text>
+  </g>
+
+  <!-- Response to the client -->
+  <rect x="120" y="890" width="440" height="114" rx="14" fill="#DDF4FF" stroke="#0969DA" stroke-width="2"/>
+  <text x="340" y="916" font-size="16" font-weight="600" text-anchor="middle">201 Created · la orden guardada</text>
+  <rect x="138" y="928" width="128" height="42" rx="8" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
+  <rect x="276" y="928" width="128" height="42" rx="8" fill="#FFF8E1" stroke="#B26A00" stroke-width="1.5"/>
+  <rect x="414" y="928" width="128" height="42" rx="8" fill="#FFEBEE" stroke="#C62828" stroke-width="1.5"/>
+  <g text-anchor="middle">
+    <text x="202" y="946" font-size="13" font-weight="700" fill="#1B5E20">FILLED</text>
+    <text x="202" y="962" font-size="12" fill="#424A53">MARKET</text>
+    <text x="340" y="946" font-size="13" font-weight="700" fill="#7A4A00">NEW</text>
+    <text x="340" y="962" font-size="12" fill="#424A53">LIMIT, reserva</text>
+    <text x="478" y="946" font-size="13" font-weight="700" fill="#B71C1C">REJECTED</text>
+    <text x="478" y="962" font-size="12" fill="#424A53">+ reason</text>
+    <text x="340" y="991" font-size="12" fill="#424A53">REJECTED también es 201: el rechazo se guarda</text>
+  </g>
+
+  <!-- Error exits: small red boxes on the right -->
+  <g fill="#FFEBEE" stroke="#C62828" stroke-width="1.5">
+    <rect x="630" y="111" width="254" height="46" rx="8"/>
+    <rect x="630" y="255" width="254" height="66" rx="8"/>
+    <rect x="630" y="372" width="254" height="46" rx="8"/>
+    <rect x="630" y="424" width="254" height="46" rx="8"/>
+  </g>
+  <g>
+    <text x="644" y="130" font-size="13" font-weight="700" fill="#B71C1C">400 VALIDATION_ERROR</text>
+    <text x="644" y="148" font-size="12" fill="#424A53">body o clave inválidos</text>
+
+    <text x="644" y="275" font-size="13" font-weight="700" fill="#B71C1C">503 BUSY + Retry-After: 1</text>
+    <text x="644" y="293" font-size="12" fill="#424A53">en cualquier paso: lock &gt; 3 s,</text>
+    <text x="644" y="310" font-size="12" fill="#424A53">sentencia &gt; 5 s, inactiva &gt; 2 s</text>
+
+    <text x="644" y="391" font-size="13" font-weight="700" fill="#B71C1C">422 IDEMPOTENCY_KEY_REUSED</text>
+    <text x="644" y="409" font-size="12" fill="#424A53">misma clave, otro body</text>
+
+    <text x="644" y="443" font-size="13" font-weight="700" fill="#B71C1C">501 IDEMPOTENCY_UNAVAILABLE</text>
+    <text x="644" y="461" font-size="12" fill="#424A53">sin la tabla idempotency_keys</text>
+  </g>
+
+  <!-- Main path connectors -->
+  <g stroke="#424A53" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <path d="M340,164 V238"/>
+    <path d="M340,336 V364"/>
+    <path d="M340,476 V504"/>
+    <path d="M340,586 V614"/>
+    <path d="M340,696 V724"/>
+    <path d="M340,826 V888"/>
+    <!-- idempotent replay: skips to the response -->
+    <path d="M120,421 H78 V947 H118"/>
+  </g>
+  <!-- Error connectors -->
+  <g stroke="#C62828" stroke-width="1.5" fill="none" marker-end="url(#arrow-err)">
+    <path d="M560,134 H628"/>
+    <path d="M560,288 H628"/>
+    <path d="M560,395 H628"/>
+    <path d="M560,447 H628"/>
+  </g>
+
+  <!-- Connector labels on backplates -->
+  <rect x="300" y="841" width="80" height="20" rx="4" fill="#ffffff"/>
+  <text x="340" y="856" font-size="12" font-weight="700" text-anchor="middle" fill="#424A53">COMMIT</text>
+  <g transform="translate(78,640) rotate(-90)">
+    <rect x="-180" y="-10" width="360" height="20" fill="#F6F8FA"/>
+    <text x="0" y="4" font-size="12" text-anchor="middle" fill="#424A53">clave repetida: misma respuesta + Idempotent-Replayed: true</text>
+  </g>
+</svg>
